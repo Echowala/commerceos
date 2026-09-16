@@ -1,0 +1,94 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { prisma } from "@commerceos/database";
+import { getRequestContext, requireTenant } from "./tenant.js";
+
+const json = (res: ServerResponse, status: number, body: unknown) => {
+  res.statusCode = status;
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(body));
+};
+
+const readBody = async (req: IncomingMessage) => {
+  let raw = "";
+  for await (const chunk of req) raw += chunk;
+  return raw ? JSON.parse(raw) : {};
+};
+
+const movementTypes = ["RECEIVE", "ADJUSTMENT", "RETURN", "RESTOCK"] as const;
+type AdjustmentType = (typeof movementTypes)[number];
+
+export const handleInventoryRequest = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
+  const url = new URL(req.url ?? "/", "http://localhost");
+  if (!url.pathname === false && !url.pathname.startsWith("/inventory")) return false;
+
+  try {
+    const tenantId = requireTenant(getRequestContext(req.headers));
+
+    if (url.pathname === "/inventory" && req.method === "GET") {
+      const variants = await prisma.productVariant.findMany({
+        where: { product: { store: { tenantId } } },
+        select: {
+          id: true,
+          sku: true,
+          stock: true,
+          price: true,
+          product: { select: { id: true, name: true, status: true, store: { select: { id: true, name: true, currency: true } } } },
+        },
+        orderBy: { updatedAt: "desc" },
+      });
+      const threshold = Math.max(0, Number(url.searchParams.get("lowStock") ?? 5));
+      return json(res, 200, {
+        threshold,
+        summary: {
+          skus: variants.length,
+          units: variants.reduce((sum, variant) => sum + variant.stock, 0),
+          lowStock: variants.filter((variant) => variant.stock > 0 && variant.stock <= threshold).length,
+          outOfStock: variants.filter((variant) => variant.stock === 0).length,
+        },
+        items: variants.map((variant) => ({
+          ...variant,
+          price: variant.price.toString(),
+          availability: variant.stock === 0 ? "OUT_OF_STOCK" : variant.stock <= threshold ? "LOW_STOCK" : "IN_STOCK",
+        })),
+      }) as never;
+    }
+
+    const movementMatch = url.pathname.match(/^\/inventory\/([^/]+)\/movements$/);
+    if (movementMatch && req.method === "GET") {
+      const variant = await prisma.productVariant.findFirst({ where: { id: movementMatch[1], product: { store: { tenantId } } }, select: { id: true, sku: true, product: { select: { name: true } } } });
+      if (!variant) return json(res, 404, { error: "inventory_item_not_found" }) as never;
+      const movements = await prisma.inventoryMovement.findMany({ where: { tenantId, variantId: variant.id }, orderBy: { createdAt: "desc" }, take: 100 });
+      return json(res, 200, { variant, movements }) as never;
+    }
+
+    const adjustMatch = url.pathname.match(/^\/inventory\/([^/]+)\/adjust$/);
+    if (adjustMatch && req.method === "POST") {
+      const input = await readBody(req);
+      const quantity = Number(input.quantity);
+      const type = String(input.type ?? "ADJUSTMENT") as AdjustmentType;
+      const reason = input.reason == null ? null : String(input.reason).trim() || null;
+      if (!Number.isInteger(quantity) || quantity === 0) return json(res, 400, { error: "quantity must be a non-zero integer" }) as never;
+      if (!movementTypes.includes(type)) return json(res, 400, { error: "invalid_inventory_movement_type" }) as never;
+      const variantId = adjustMatch[1];
+
+      const result = await prisma.$transaction(async (tx) => {
+        const variant = await tx.productVariant.findFirst({ where: { id: variantId, product: { store: { tenantId } } }, include: { product: { select: { id: true, name: true, storeId: true } } } });
+        if (!variant) throw new Error("INVENTORY_ITEM_NOT_FOUND");
+        const nextStock = variant.stock + quantity;
+        if (nextStock < 0) throw new Error("INSUFFICIENT_STOCK");
+        const updated = await tx.productVariant.update({ where: { id: variant.id }, data: { stock: nextStock } });
+        const movement = await tx.inventoryMovement.create({ data: { tenantId, productId: variant.productId, variantId: variant.id, type, quantity, stockBefore: variant.stock, stockAfter: nextStock, reason, referenceId: input.referenceId ? String(input.referenceId) : null } });
+        return { variant: updated, movement };
+      });
+      return json(res, 200, { ...result, variant: { ...result.variant, price: result.variant.price.toString() } }) as never;
+    }
+
+    return json(res, 404, { error: "inventory_route_not_found" }) as never;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message === "UNAUTHORIZED") return json(res, 401, { error: "unauthorized" }) as never;
+    if (message === "INVENTORY_ITEM_NOT_FOUND") return json(res, 404, { error: "inventory_item_not_found" }) as never;
+    if (message === "INSUFFICIENT_STOCK") return json(res, 409, { error: "insufficient_stock" }) as never;
+    return json(res, 500, { error: "internal_server_error" }) as never;
+  }
+};
