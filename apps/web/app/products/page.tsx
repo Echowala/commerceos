@@ -4,7 +4,9 @@ import { FormEvent, useEffect, useState } from "react";
 import { api, clearToken } from "../../lib/api";
 
 type Store = { id: string; name: string; currency: string };
-type Product = { id: string; name: string; slug: string; status: string; variants: { id: string; sku: string; price: string | number; stock: number }[] };
+type Product = { id: string; name: string; slug: string; status: string; storeId?: string; variants: { id: string; sku: string; price: string | number; stock: number }[] };
+
+type InventoryAdjustment = { quantity: number; type: "RECEIVE" | "ADJUSTMENT"; reason: string };
 
 export default function ProductsPage() {
   const [stores, setStores] = useState<Store[]>([]);
@@ -34,18 +36,43 @@ export default function ProductsPage() {
 
   const startEdit = (product: Product) => {
     const variant = product.variants[0];
-    setEditingId(product.id); setStoreId((product as Product & { storeId?: string }).storeId ?? storeId); setName(product.name); setSku(variant?.sku ?? ""); setPrice(variant ? String(variant.price) : ""); setStock(variant ? String(variant.stock) : "0"); setStatus(product.status); setError("");
+    setEditingId(product.id); setStoreId(product.storeId ?? storeId); setName(product.name); setSku(variant?.sku ?? ""); setPrice(variant ? String(variant.price) : ""); setStock(variant ? String(variant.stock) : "0"); setStatus(product.status); setError("");
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const adjustInventory = async (variantId: string, adjustment: InventoryAdjustment) => {
+    if (adjustment.quantity === 0) return;
+    await api(`/inventory/${variantId}/adjust`, {
+      method: "POST",
+      body: JSON.stringify(adjustment),
+    });
   };
 
   const submitProduct = async (event: FormEvent) => {
     event.preventDefault(); setSaving(true); setError("");
     try {
+      const requestedStock = Number(stock);
+      if (!Number.isInteger(requestedStock) || requestedStock < 0) throw new Error("Stock must be a non-negative integer");
+
       if (editingId) {
-        const updated = await api<Product>(`/products/${editingId}`, { method: "PATCH", body: JSON.stringify({ name: name.trim(), variant: { sku: sku.trim(), price: Number(price), stock: Number(stock) }, status }) });
-        setProducts(current => current.map(product => product.id === updated.id ? updated : product));
+        const current = products.find(product => product.id === editingId);
+        const variant = current?.variants[0];
+        if (!variant) throw new Error("Product variant not found");
+        const previousStock = variant.stock;
+        const updated = await api<Product>(`/products/${editingId}`, { method: "PATCH", body: JSON.stringify({ name: name.trim(), variant: { sku: sku.trim(), price: Number(price) }, status }) });
+        const delta = requestedStock - previousStock;
+        if (delta !== 0) {
+          await adjustInventory(variant.id, { quantity: delta, type: "ADJUSTMENT", reason: "Product stock edit" });
+          updated.variants = updated.variants.map(item => item.id === variant.id ? { ...item, stock: requestedStock } : item);
+        }
+        setProducts(currentProducts => currentProducts.map(product => product.id === updated.id ? updated : product));
       } else {
-        const product = await api<Product>("/products", { method: "POST", body: JSON.stringify({ storeId, name: name.trim(), variant: { sku: sku.trim(), price: Number(price), stock: Number(stock) }, status }) });
+        const product = await api<Product>("/products", { method: "POST", body: JSON.stringify({ storeId, name: name.trim(), variant: { sku: sku.trim(), price: Number(price), stock: 0 }, status }) });
+        const variant = product.variants[0];
+        if (variant && requestedStock > 0) {
+          await adjustInventory(variant.id, { quantity: requestedStock, type: "RECEIVE", reason: "Initial product stock" });
+          product.variants = product.variants.map(item => item.id === variant.id ? { ...item, stock: requestedStock } : item);
+        }
         setProducts(current => [product, ...current]);
       }
       resetForm();
@@ -56,11 +83,11 @@ export default function ProductsPage() {
   const logout = () => { clearToken(); window.location.href = "/login"; };
 
   return <main className="dashboard">
-    <aside className="sidebar"><div className="brand">CommerceOS</div><nav className="nav"><a href="/">Overview</a><a href="/orders">Orders</a><a href="/customers">Customers</a><a className="active" href="/products">Products</a><span>Inventory</span><span>Analytics</span><span>Automations</span><span>Settings</span></nav><button className="logout" onClick={logout}>Log out</button></aside>
+    <aside className="sidebar"><div className="brand">CommerceOS</div><nav className="nav"><a href="/">Overview</a><a href="/orders">Orders</a><a href="/customers">Customers</a><a className="active" href="/products">Products</a><a href="/inventory">Inventory</a><span>Analytics</span><span>Automations</span><span>Settings</span></nav><button className="logout" onClick={logout}>Log out</button></aside>
     <section className="main">
       <header className="header"><div><h1 className="title">Products</h1><div className="muted">Manage your catalog, pricing and available stock.</div></div><a className="back-link" href="/">Dashboard</a></header>
       {error && <p className="error">{error}</p>}
-      <section className="section"><div className="detail-header"><div><h2>{editingId ? "Edit product" : "Add product"}</h2><p className="muted">{editingId ? "Update catalog details and the first sellable variant." : "Create the first sellable variant for a product."}</p></div>{editingId && <button className="back-link" type="button" onClick={resetForm}>Cancel</button>}</div>
+      <section className="section"><div className="detail-header"><div><h2>{editingId ? "Edit product" : "Add product"}</h2><p className="muted">{editingId ? "Update catalog details and stock through the inventory ledger." : "Create a product and record its opening stock as an inventory receipt."}</p></div>{editingId && <button className="back-link" type="button" onClick={resetForm}>Cancel</button>}</div>
         {stores.length === 0 ? <p className="muted">Create a store before adding products.</p> : <form onSubmit={submitProduct} className="tracking-form">
           {!editingId && <label>Store<select className="status-select" value={storeId} onChange={e => setStoreId(e.target.value)}>{stores.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}
           <label>Product name<input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Classic T-Shirt" required /></label>
