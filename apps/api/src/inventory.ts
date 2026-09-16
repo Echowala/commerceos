@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { prisma } from "@commerceos/database";
 import { getRequestContext, requireTenant } from "./tenant.js";
+import { prisma } from "@commerceos/database";
 
 const json = (res: ServerResponse, status: number, body: unknown) => {
   res.statusCode = status;
@@ -17,7 +17,18 @@ const readBody = async (req: IncomingMessage) => {
 const movementTypes = ["RECEIVE", "ADJUSTMENT", "RETURN", "RESTOCK"] as const;
 type AdjustmentType = (typeof movementTypes)[number];
 
-export const recordInventoryMovement = async (tx: any, input: { tenantId: string; productId: string; variantId: string; type: "RECEIVE" | "ADJUSTMENT" | "RETURN" | "RESTOCK" | "SALE"; quantity: number; stockBefore: number; stockAfter: number; reason?: string | null; referenceId?: string | null; createdByUserId?: string | null }) => tx.inventoryMovement.create({ data: input });
+export const recordInventoryMovement = async (tx: any, input: {
+  tenantId: string;
+  productId: string;
+  variantId: string;
+  type: "RECEIVE" | "ADJUSTMENT" | "RETURN" | "RESTOCK" | "SALE";
+  quantity: number;
+  stockBefore: number;
+  stockAfter: number;
+  reason?: string | null;
+  referenceId?: string | null;
+  createdByUserId?: string | null;
+}) => tx.inventoryMovement.create({ data: input });
 
 export const handleInventoryRequest = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -77,12 +88,37 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
       const variantId = adjustMatch[1];
 
       const result = await prisma.$transaction(async (tx) => {
-        const variant = await tx.productVariant.findFirst({ where: { id: variantId, product: { store: { tenantId } } }, include: { product: { select: { name: true } } } });
+        const variant = await tx.productVariant.findFirst({
+          where: { id: variantId, product: { store: { tenantId } } },
+          include: { product: { select: { name: true } } },
+        });
         if (!variant) throw new Error("INVENTORY_ITEM_NOT_FOUND");
+
         const nextStock = variant.stock + quantity;
         if (nextStock < 0) throw new Error("INSUFFICIENT_STOCK");
-        const updated = await tx.productVariant.update({ where: { id: variant.id }, data: { stock: nextStock } });
-        const movement = await recordInventoryMovement(tx, { tenantId, productId: variant.productId, variantId: variant.id, type, quantity, stockBefore: variant.stock, stockAfter: nextStock, reason, referenceId: input.referenceId ? String(input.referenceId) : null, createdByUserId: userId });
+
+        // Optimistic concurrency guard: the update only succeeds if the stock
+        // value we read is still current. This prevents stale stockBefore/
+        // stockAfter ledger entries when multiple adjustments race.
+        const updatedCount = await tx.productVariant.updateMany({
+          where: { id: variant.id, stock: variant.stock },
+          data: { stock: { increment: quantity } },
+        });
+        if (updatedCount.count !== 1) throw new Error("INVENTORY_CONFLICT");
+
+        const movement = await recordInventoryMovement(tx, {
+          tenantId,
+          productId: variant.productId,
+          variantId: variant.id,
+          type,
+          quantity,
+          stockBefore: variant.stock,
+          stockAfter: nextStock,
+          reason,
+          referenceId: input.referenceId ? String(input.referenceId) : null,
+          createdByUserId: userId,
+        });
+        const updated = await tx.productVariant.findUniqueOrThrow({ where: { id: variant.id } });
         return { variant: updated, movement };
       });
       return json(res, 200, { ...result, variant: { ...result.variant, price: result.variant.price.toString() } }) as never;
@@ -94,6 +130,7 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
     if (message === "UNAUTHORIZED") return json(res, 401, { error: "unauthorized" }) as never;
     if (message === "INVENTORY_ITEM_NOT_FOUND") return json(res, 404, { error: "inventory_item_not_found" }) as never;
     if (message === "INSUFFICIENT_STOCK") return json(res, 409, { error: "insufficient_stock" }) as never;
+    if (message === "INVENTORY_CONFLICT") return json(res, 409, { error: "inventory_conflict", message: "Stock changed while this adjustment was being processed. Please retry." }) as never;
     return json(res, 500, { error: "internal_server_error" }) as never;
   }
 };
