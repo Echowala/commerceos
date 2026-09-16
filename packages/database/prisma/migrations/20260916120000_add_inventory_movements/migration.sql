@@ -1,8 +1,6 @@
 -- Inventory movement audit trail.
 CREATE TYPE "InventoryMovementType" AS ENUM ('RECEIVE', 'ADJUSTMENT', 'SALE', 'RETURN', 'RESTOCK');
 
-ALTER TABLE "Tenant" ADD COLUMN "inventoryMovements" TEXT;
-
 CREATE TABLE "InventoryMovement" (
   "id" TEXT NOT NULL,
   "tenantId" TEXT NOT NULL,
