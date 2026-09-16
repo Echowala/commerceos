@@ -4,9 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { api, clearToken } from "../../lib/api";
 
 type Store = { id: string; name: string; currency: string };
-type Product = { id: string; name: string; slug: string; status: string; variants: { id: string; sku: string; price: string | number; stock: number }[] };
-
-const statuses = ["DRAFT", "ACTIVE", "ARCHIVED"] as const;
+type Product = { id: string; name: string; slug: string; status: string; variants: { sku: string; price: string | number; stock: number }[] };
 
 export default function ProductsPage() {
   const [stores, setStores] = useState<Store[]>([]);
@@ -18,7 +16,6 @@ export default function ProductsPage() {
   const [stock, setStock] = useState("0");
   const [status, setStatus] = useState("DRAFT");
   const [saving, setSaving] = useState(false);
-  const [updatingId, setUpdatingId] = useState("");
   const [error, setError] = useState("");
 
   const load = async () => {
@@ -27,39 +24,19 @@ export default function ProductsPage() {
       setStores(storeData);
       setProducts(productData);
       if (!storeId && storeData[0]) setStoreId(storeData[0].id);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to load products");
-    }
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to load products"); }
   };
 
   useEffect(() => { void load(); }, []);
 
   const createProduct = async (event: FormEvent) => {
-    event.preventDefault();
-    setSaving(true);
-    setError("");
+    event.preventDefault(); setSaving(true); setError("");
     try {
-      const product = await api<Product>("/products", {
-        method: "POST",
-        body: JSON.stringify({ storeId, name: name.trim(), variant: { sku: sku.trim(), price: Number(price), stock: Number(stock) }, status }),
-      });
+      const product = await api<Product>("/products", { method: "POST", body: JSON.stringify({ storeId, name: name.trim(), variant: { sku: sku.trim(), price: Number(price), stock: Number(stock) }, status }) });
       setProducts(current => [product, ...current]);
       setName(""); setSku(""); setPrice(""); setStock("0"); setStatus("DRAFT");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to create product");
-    } finally { setSaving(false); }
-  };
-
-  const updateStatus = async (product: Product, nextStatus: string) => {
-    if (!statuses.includes(nextStatus as typeof statuses[number])) return;
-    setUpdatingId(product.id);
-    setError("");
-    try {
-      const updated = await api<{ id: string; status: string }>(`/products/${product.id}`, { method: "PATCH", body: JSON.stringify({ status: nextStatus }) });
-      setProducts(current => current.map(item => item.id === product.id ? { ...item, status: updated.status } : item));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to update product");
-    } finally { setUpdatingId(""); }
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to create product"); }
+    finally { setSaving(false); }
   };
 
   const logout = () => { clearToken(); window.location.href = "/login"; };
@@ -81,7 +58,7 @@ export default function ProductsPage() {
         </form>}
       </section>
       <section className="section"><div className="detail-header"><div><h2>Catalog</h2><p className="muted">{products.length} product{products.length === 1 ? "" : "s"} in this workspace.</p></div></div>
-        {products.length === 0 ? <p className="muted">No products yet.</p> : <div className="table-wrap"><table><thead><tr><th>Product</th><th>SKU</th><th>Price</th><th>Stock</th><th>Status</th></tr></thead><tbody>{products.map(product => { const variant = product.variants[0]; return <tr key={product.id}><td><strong>{product.name}</strong><div className="muted small">/{product.slug}</div></td><td>{variant?.sku ?? "—"}</td><td>{variant?.price ?? "0"}</td><td>{variant?.stock ?? 0}</td><td><select className="status-select" value={product.status} disabled={updatingId === product.id} onChange={e => void updateStatus(product, e.target.value)}><option value="DRAFT">Draft</option><option value="ACTIVE">Active</option><option value="ARCHIVED">Archived</option></select></td></tr>; })}</tbody></table></div>}
+        {products.length === 0 ? <p className="muted">No products yet.</p> : <div className="table-wrap"><table><thead><tr><th>Product</th><th>SKU</th><th>Price</th><th>Stock</th><th>Status</th></tr></thead><tbody>{products.map(product => { const variant = product.variants[0]; return <tr key={product.id}><td><strong>{product.name}</strong><div className="muted small">/{product.slug}</div></td><td>{variant?.sku ?? "—"}</td><td>{variant?.price ?? "0"}</td><td>{variant?.stock ?? 0}</td><td><span className="badge">{product.status}</span></td></tr>; })}</tbody></table></div>}
       </section>
     </section>
   </main>;
