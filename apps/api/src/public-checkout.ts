@@ -3,8 +3,8 @@ import { prisma } from "@commerceos/database";
 
 const orderNumber = () => `CO-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString("hex").toUpperCase()}`;
 
-export async function createPublicOrder(input: any, tenantSlug: string, storeSlug: string) {
-  if (!Array.isArray(input.items) || input.items.length === 0) throw new Error("ITEMS_REQUIRED");
+export async function createPublicOrder(input: any, tenantSlug: string, storeSlug: string, idempotencyKey: string | null = null) {
+  if (!Array.isArray(input.items) || input.items.length === 0 || input.items.length > 100) throw new Error("ITEMS_REQUIRED");
   const email = input.customer?.email ? String(input.customer.email).trim().toLowerCase() : null;
   const shippingName = String(input.shippingName ?? input.customer?.name ?? "").trim();
   const shippingPhone = String(input.shippingPhone ?? input.customer?.phone ?? "").trim();
@@ -14,27 +14,44 @@ export async function createPublicOrder(input: any, tenantSlug: string, storeSlu
   const store = await prisma.store.findFirst({ where: { slug: storeSlug, tenant: { slug: tenantSlug } } });
   if (!store) throw new Error("STORE_NOT_FOUND");
 
-  return prisma.$transaction(async tx => {
-    const customer = await tx.customer.findFirst({ where: { tenantId: store.tenantId, email } });
-    const customerId = customer?.id ?? (await tx.customer.create({ data: { tenantId: store.tenantId, email, phone: shippingPhone, firstName: shippingName } })).id;
-    const orderItems: { productId: string; variantId: string; name: string; quantity: number; unitPrice: number; total: number }[] = [];
-    const movements: { productId: string; variantId: string; quantity: number; stockBefore: number; stockAfter: number }[] = [];
-    let subtotal = 0;
-    for (const raw of input.items) {
-      const quantity = Number(raw.quantity);
-      if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("INVALID_QUANTITY");
-      const variant = await tx.productVariant.findFirst({ where: { id: raw.variantId, product: { storeId: store.id, status: "ACTIVE" } }, include: { product: true } });
-      if (!variant) throw new Error("ITEM_NOT_FOUND");
-      const updated = await tx.productVariant.updateMany({ where: { id: variant.id, stock: { gte: quantity } }, data: { stock: { decrement: quantity } } });
-      if (updated.count !== 1) throw new Error("INSUFFICIENT_STOCK");
-      const stockAfter = variant.stock - quantity;
-      const unitPrice = Number(variant.price); const total = unitPrice * quantity;
-      orderItems.push({ productId: variant.productId, variantId: variant.id, name: variant.product.name, quantity, unitPrice, total });
-      movements.push({ productId: variant.productId, variantId: variant.id, quantity: -quantity, stockBefore: variant.stock, stockAfter });
-      subtotal += total;
+  if (idempotencyKey) {
+    const existing = await prisma.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
+    if (existing) return existing;
+  }
+
+  try {
+    return await prisma.$transaction(async tx => {
+      if (idempotencyKey) {
+        const existing = await tx.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
+        if (existing) return existing;
+      }
+      const customer = await tx.customer.findFirst({ where: { tenantId: store.tenantId, email } });
+      const customerId = customer?.id ?? (await tx.customer.create({ data: { tenantId: store.tenantId, email, phone: shippingPhone, firstName: shippingName } })).id;
+      const orderItems: { productId: string; variantId: string; name: string; quantity: number; unitPrice: number; total: number }[] = [];
+      const movements: { productId: string; variantId: string; quantity: number; stockBefore: number; stockAfter: number }[] = [];
+      let subtotal = 0;
+      for (const raw of input.items) {
+        const quantity = Number(raw.quantity);
+        if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("INVALID_QUANTITY");
+        const variant = await tx.productVariant.findFirst({ where: { id: raw.variantId, product: { storeId: store.id, status: "ACTIVE" } }, include: { product: true } });
+        if (!variant) throw new Error("ITEM_NOT_FOUND");
+        const updated = await tx.productVariant.updateMany({ where: { id: variant.id, stock: { gte: quantity } }, data: { stock: { decrement: quantity } } });
+        if (updated.count !== 1) throw new Error("INSUFFICIENT_STOCK");
+        const stockAfter = variant.stock - quantity;
+        const unitPrice = Number(variant.price); const total = unitPrice * quantity;
+        orderItems.push({ productId: variant.productId, variantId: variant.id, name: variant.product.name, quantity, unitPrice, total });
+        movements.push({ productId: variant.productId, variantId: variant.id, quantity: -quantity, stockBefore: variant.stock, stockAfter });
+        subtotal += total;
+      }
+      const order = await tx.order.create({ data: { tenantId: store.tenantId, storeId: store.id, customerId, orderNumber: orderNumber(), idempotencyKey, status: "CONFIRMED", paymentStatus: "PENDING", paymentMethod: "COD", subtotal, total: subtotal, currency: store.currency, shippingName, shippingPhone, shippingAddress, items: { create: orderItems } } });
+      await tx.inventoryMovement.createMany({ data: movements.map(movement => ({ tenantId: store.tenantId, productId: movement.productId, variantId: movement.variantId, type: "SALE", quantity: movement.quantity, stockBefore: movement.stockBefore, stockAfter: movement.stockAfter, referenceId: order.id, reason: `Order ${order.orderNumber}` })) });
+      return order;
+    });
+  } catch (error) {
+    if (idempotencyKey && error instanceof Error && error.message.includes("Order_storeId_idempotencyKey_key")) {
+      const existing = await prisma.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
+      if (existing) return existing;
     }
-    const order = await tx.order.create({ data: { tenantId: store.tenantId, storeId: store.id, customerId, orderNumber: orderNumber(), status: "CONFIRMED", paymentStatus: "PENDING", paymentMethod: "COD", subtotal, total: subtotal, currency: store.currency, shippingName, shippingPhone, shippingAddress, items: { create: orderItems } } });
-    await tx.inventoryMovement.createMany({ data: movements.map(movement => ({ tenantId: store.tenantId, productId: movement.productId, variantId: movement.variantId, type: "SALE", quantity: movement.quantity, stockBefore: movement.stockBefore, stockAfter: movement.stockAfter, referenceId: order.id, reason: `Order ${order.orderNumber}` })) });
-    return order;
-  });
+    throw error;
+  }
 }
