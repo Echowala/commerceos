@@ -43,6 +43,7 @@ export async function createPublicOrder(input: any, tenantSlug: string, storeSlu
         }
       }
       const customer = await tx.customer.findFirst({ where: { tenantId: store.tenantId, email } });
+      const customerCreated = !customer;
       const customerId = customer?.id ?? (await tx.customer.create({ data: { tenantId: store.tenantId, email, phone: shippingPhone, firstName: shippingName } })).id;
       const orderItems: { productId: string; variantId: string; name: string; quantity: number; unitPrice: number; total: number }[] = [];
       const movements: { productId: string; variantId: string; quantity: number; stockBefore: number; stockAfter: number }[] = [];
@@ -62,6 +63,10 @@ export async function createPublicOrder(input: any, tenantSlug: string, storeSlu
       }
       const order = await tx.order.create({ data: { tenantId: store.tenantId, storeId: store.id, customerId, orderNumber: orderNumber(), idempotencyKey, idempotencyFingerprint: fingerprint, status: "CONFIRMED", paymentStatus: "PENDING", paymentMethod: "COD", subtotal, total: subtotal, currency: store.currency, shippingName, shippingPhone, shippingAddress, items: { create: orderItems } } });
       await tx.inventoryMovement.createMany({ data: movements.map(movement => ({ tenantId: store.tenantId, productId: movement.productId, variantId: movement.variantId, type: "SALE", quantity: movement.quantity, stockBefore: movement.stockBefore, stockAfter: movement.stockAfter, referenceId: order.id, reason: `Order ${order.orderNumber}` })) });
+      await tx.customerEvent.createMany({ data: [
+        ...(customerCreated ? [{ tenantId: store.tenantId, customerId, type: "CUSTOMER_CREATED" as const, data: { source: "public_checkout" } }] : []),
+        { tenantId: store.tenantId, customerId, type: "ORDER_PLACED" as const, data: { orderId: order.id, orderNumber: order.orderNumber, total: order.total.toString(), currency: order.currency } },
+      ] });
       return order;
     });
   } catch (error) {
