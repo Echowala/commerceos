@@ -21,8 +21,8 @@ type Rule = { field: "orderCount" | "totalSpend" | "lastOrderDaysAgo" | "tag"; o
 type SegmentRules = { match: "all" | "any"; rules: Rule[] };
 type CustomerForSegment = { id: string; orders: { total: unknown; status: string; createdAt: Date }[]; tags: { tag: { name: string } }[] };
 
-const fields = new Set<string>(["orderCount", "totalSpend", "lastOrderDaysAgo", "tag"]);
-const operators = new Set<string>(["gte", "lte", "eq", "neq", "gt", "lt"]);
+const validField = (value: unknown): value is Rule["field"] => value === "orderCount" || value === "totalSpend" || value === "lastOrderDaysAgo" || value === "tag";
+const validOperator = (value: unknown): value is Rule["operator"] => value === "gte" || value === "lte" || value === "eq" || value === "neq" || value === "gt" || value === "lt";
 
 const validRules = (value: unknown): value is SegmentRules => {
   if (!value || typeof value !== "object") return false;
@@ -32,11 +32,9 @@ const validRules = (value: unknown): value is SegmentRules => {
   return input.rules.every((rule: unknown): boolean => {
     if (!rule || typeof rule !== "object") return false;
     const item = rule as Record<string, unknown>;
-    const field = String(item.field);
-    const operator = String(item.operator);
-    if (!fields.has(field) || !operators.has(operator)) return false;
-    if (field === "tag") {
-      return (operator === "eq" || operator === "neq") && typeof item.value === "string" && item.value.trim().length > 0 && item.value.trim().length <= 80;
+    if (!validField(item.field) || !validOperator(item.operator)) return false;
+    if (item.field === "tag") {
+      return (item.operator === "eq" || item.operator === "neq") && typeof item.value === "string" && item.value.trim().length > 0 && item.value.trim().length <= 80;
     }
     const n = Number(item.value);
     return Number.isFinite(n) && n >= 0;
@@ -44,16 +42,16 @@ const validRules = (value: unknown): value is SegmentRules => {
 };
 
 const matches = (rules: SegmentRules, customer: CustomerForSegment): boolean => {
-  const validOrders = customer.orders.filter(order => order.status !== "CANCELLED" && order.status !== "REFUNDED");
+  const validOrders = customer.orders.filter((order): boolean => order.status !== "CANCELLED" && order.status !== "REFUNDED");
   const spend = validOrders.reduce((sum, order) => sum + Number(order.total), 0);
   const lastOrder = customer.orders[0]?.createdAt ?? null;
   const lastOrderDaysAgo = lastOrder ? Math.max(0, (Date.now() - lastOrder.getTime()) / 86_400_000) : null;
   const evaluate = (rule: Rule): boolean => {
     if (rule.field === "tag") {
-      const hasTag = customer.tags.some(({ tag }) => tag.name.toLowerCase() === String(rule.value).trim().toLowerCase());
+      const hasTag = customer.tags.some(({ tag }): boolean => tag.name.toLowerCase() === String(rule.value).trim().toLowerCase());
       return rule.operator === "eq" ? hasTag : !hasTag;
     }
-    const actual = rule.field === "orderCount" ? validOrders.length : rule.field === "totalSpend" ? spend : lastOrderDaysAgo;
+    const actual: number | null = rule.field === "orderCount" ? validOrders.length : rule.field === "totalSpend" ? spend : lastOrderDaysAgo;
     if (actual === null) return false;
     const expected = Number(rule.value);
     if (rule.operator === "gte") return actual >= expected;
@@ -63,7 +61,7 @@ const matches = (rules: SegmentRules, customer: CustomerForSegment): boolean => 
     if (rule.operator === "eq") return actual === expected;
     return actual !== expected;
   };
-  return rules.match === "all" ? rules.rules.every(evaluate) : rules.rules.some(evaluate);
+  return rules.match === "all" ? rules.rules.every((rule): boolean => evaluate(rule)) : rules.rules.some((rule): boolean => evaluate(rule));
 };
 
 const parseRules = (value: Prisma.JsonValue): SegmentRules | null => validRules(value) ? value : null;
