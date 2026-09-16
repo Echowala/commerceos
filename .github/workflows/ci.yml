@@ -28,7 +28,7 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: Generate Prisma client
-        run: pnpm exec prisma generate --schema packages/database/prisma/schema.prisma
+        run: pnpm --filter @commerceos/database generate
 
       - name: Typecheck
         run: pnpm typecheck
