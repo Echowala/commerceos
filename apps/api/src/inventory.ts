@@ -17,12 +17,16 @@ const readBody = async (req: IncomingMessage) => {
 const movementTypes = ["RECEIVE", "ADJUSTMENT", "RETURN", "RESTOCK"] as const;
 type AdjustmentType = (typeof movementTypes)[number];
 
+export const recordInventoryMovement = async (tx: any, input: { tenantId: string; productId: string; variantId: string; type: "RECEIVE" | "ADJUSTMENT" | "RETURN" | "RESTOCK" | "SALE"; quantity: number; stockBefore: number; stockAfter: number; reason?: string | null; referenceId?: string | null; createdByUserId?: string | null }) => tx.inventoryMovement.create({ data: input });
+
 export const handleInventoryRequest = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
   const url = new URL(req.url ?? "/", "http://localhost");
   if (!url.pathname.startsWith("/inventory")) return false;
 
   try {
-    const tenantId = requireTenant(getRequestContext(req.headers));
+    const context = getRequestContext(req.headers);
+    const tenantId = requireTenant(context);
+    const userId = context.auth?.userId ?? null;
 
     if (url.pathname === "/inventory" && req.method === "GET") {
       const variants = await prisma.productVariant.findMany({
@@ -78,7 +82,7 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
         const nextStock = variant.stock + quantity;
         if (nextStock < 0) throw new Error("INSUFFICIENT_STOCK");
         const updated = await tx.productVariant.update({ where: { id: variant.id }, data: { stock: nextStock } });
-        const movement = await tx.inventoryMovement.create({ data: { tenantId, productId: variant.productId, variantId: variant.id, type, quantity, stockBefore: variant.stock, stockAfter: nextStock, reason, referenceId: input.referenceId ? String(input.referenceId) : null } });
+        const movement = await recordInventoryMovement(tx, { tenantId, productId: variant.productId, variantId: variant.id, type, quantity, stockBefore: variant.stock, stockAfter: nextStock, reason, referenceId: input.referenceId ? String(input.referenceId) : null, createdByUserId: userId });
         return { variant: updated, movement };
       });
       return json(res, 200, { ...result, variant: { ...result.variant, price: result.variant.price.toString() } }) as never;
