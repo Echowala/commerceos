@@ -1,7 +1,17 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { prisma } from "@commerceos/database";
 
 const orderNumber = () => `CO-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString("hex").toUpperCase()}`;
+
+const checkoutFingerprint = (input: any) => createHash("sha256").update(JSON.stringify({
+  customer: {
+    email: input.customer?.email ? String(input.customer.email).trim().toLowerCase() : null,
+    name: String(input.shippingName ?? input.customer?.name ?? "").trim(),
+    phone: String(input.shippingPhone ?? input.customer?.phone ?? "").trim(),
+    address: String(input.shippingAddress ?? input.customer?.address ?? "").trim(),
+  },
+  items: [...input.items].map((item: any) => ({ variantId: String(item.variantId ?? ""), quantity: Number(item.quantity) })).sort((a: { variantId: string; quantity: number }, b: { variantId: string; quantity: number }) => a.variantId.localeCompare(b.variantId) || a.quantity - b.quantity),
+})).digest("hex");
 
 export async function createPublicOrder(input: any, tenantSlug: string, storeSlug: string, idempotencyKey: string | null = null) {
   if (!Array.isArray(input.items) || input.items.length === 0 || input.items.length > 100) throw new Error("ITEMS_REQUIRED");
@@ -13,17 +23,24 @@ export async function createPublicOrder(input: any, tenantSlug: string, storeSlu
 
   const store = await prisma.store.findFirst({ where: { slug: storeSlug, tenant: { slug: tenantSlug } } });
   if (!store) throw new Error("STORE_NOT_FOUND");
+  const fingerprint = idempotencyKey ? checkoutFingerprint(input) : null;
 
   if (idempotencyKey) {
     const existing = await prisma.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
-    if (existing) return existing;
+    if (existing) {
+      if (existing.idempotencyFingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_REUSED");
+      return existing;
+    }
   }
 
   try {
     return await prisma.$transaction(async tx => {
       if (idempotencyKey) {
         const existing = await tx.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
-        if (existing) return existing;
+        if (existing) {
+          if (existing.idempotencyFingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_REUSED");
+          return existing;
+        }
       }
       const customer = await tx.customer.findFirst({ where: { tenantId: store.tenantId, email } });
       const customerId = customer?.id ?? (await tx.customer.create({ data: { tenantId: store.tenantId, email, phone: shippingPhone, firstName: shippingName } })).id;
@@ -43,14 +60,17 @@ export async function createPublicOrder(input: any, tenantSlug: string, storeSlu
         movements.push({ productId: variant.productId, variantId: variant.id, quantity: -quantity, stockBefore: variant.stock, stockAfter });
         subtotal += total;
       }
-      const order = await tx.order.create({ data: { tenantId: store.tenantId, storeId: store.id, customerId, orderNumber: orderNumber(), idempotencyKey, status: "CONFIRMED", paymentStatus: "PENDING", paymentMethod: "COD", subtotal, total: subtotal, currency: store.currency, shippingName, shippingPhone, shippingAddress, items: { create: orderItems } } });
+      const order = await tx.order.create({ data: { tenantId: store.tenantId, storeId: store.id, customerId, orderNumber: orderNumber(), idempotencyKey, idempotencyFingerprint: fingerprint, status: "CONFIRMED", paymentStatus: "PENDING", paymentMethod: "COD", subtotal, total: subtotal, currency: store.currency, shippingName, shippingPhone, shippingAddress, items: { create: orderItems } } });
       await tx.inventoryMovement.createMany({ data: movements.map(movement => ({ tenantId: store.tenantId, productId: movement.productId, variantId: movement.variantId, type: "SALE", quantity: movement.quantity, stockBefore: movement.stockBefore, stockAfter: movement.stockAfter, referenceId: order.id, reason: `Order ${order.orderNumber}` })) });
       return order;
     });
   } catch (error) {
     if (idempotencyKey && error instanceof Error && error.message.includes("Order_storeId_idempotencyKey_key")) {
       const existing = await prisma.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
-      if (existing) return existing;
+      if (existing) {
+        if (existing.idempotencyFingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_REUSED");
+        return existing;
+      }
     }
     throw error;
   }
