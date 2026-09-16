@@ -9,11 +9,12 @@ const json = (res: ServerResponse, status: number, body: unknown) => { res.statu
 const body = async (req: IncomingMessage) => { let raw = ""; for await (const chunk of req) raw += chunk; return raw ? JSON.parse(raw) : {}; };
 const slugify = (value: string) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const orderNumber = () => `CO-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString("hex").toUpperCase()}`;
+const orderStatuses = ["PENDING", "CONFIRMED", "PROCESSING", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] as const;
 
 export const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   res.setHeader("access-control-allow-origin", process.env.WEB_ORIGIN ?? "http://localhost:3000");
   res.setHeader("access-control-allow-headers", "content-type, authorization");
-  res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
+  res.setHeader("access-control-allow-methods", "GET, POST, PATCH, OPTIONS");
   if (req.method === "OPTIONS") return json(res, 204, null);
   try {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -22,12 +23,19 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (url.pathname === "/auth/signup" && req.method === "POST") return json(res, 201, await signup(await body(req)));
     if (url.pathname === "/auth/dev-login" && req.method === "POST") { const input = await body(req); const user = await prisma.user.findFirst({ where: { email: String(input.email ?? "").trim().toLowerCase(), tenantId: input.tenantId } }); if (!user || user.passwordHash !== hashPassword(String(input.password ?? ""))) return json(res, 401, { error: "invalid_credentials" }); return json(res, 200, { token: createToken({ userId: user.id, tenantId: user.tenantId, role: user.role }) }); }
 
-    if (url.pathname.startsWith("/public/stores/") && req.method === "GET") {
-      const parts = url.pathname.split("/").filter(Boolean);
-      if (parts.length === 3 && parts[0] === "public" && parts[1] === "stores") {
-        const store = await prisma.store.findFirst({ where: { slug: parts[2] }, select: { id: true, name: true, slug: true, currency: true, products: { where: { status: "ACTIVE" }, include: { variants: { select: { id: true, sku: true, price: true, stock: true } } }, orderBy: { createdAt: "desc" } } } });
-        return store ? json(res, 200, store) : json(res, 404, { error: "store_not_found" });
-      }
+    const publicStoreMatch = url.pathname.match(/^\/public\/stores\/([^/]+)\/([^/]+)$/);
+    if (publicStoreMatch && req.method === "GET") {
+      const tenantSlug = decodeURIComponent(publicStoreMatch[1]); const storeSlug = decodeURIComponent(publicStoreMatch[2]);
+      const store = await prisma.store.findFirst({ where: { slug: storeSlug, tenant: { slug: tenantSlug } }, select: { id: true, name: true, slug: true, currency: true, tenant: { select: { slug: true } }, products: { where: { status: "ACTIVE" }, include: { variants: { select: { id: true, sku: true, price: true, stock: true } } }, orderBy: { createdAt: "desc" } } } });
+      return store ? json(res, 200, store) : json(res, 404, { error: "store_not_found" });
+    }
+    const publicOrderMatch = url.pathname.match(/^\/public\/stores\/([^/]+)\/([^/]+)\/orders\/([^/]+)$/);
+    if (publicOrderMatch && req.method === "GET") {
+      const tenantSlug = decodeURIComponent(publicOrderMatch[1]); const storeSlug = decodeURIComponent(publicOrderMatch[2]); const orderNo = decodeURIComponent(publicOrderMatch[3]); const email = (url.searchParams.get("email") ?? "").trim().toLowerCase();
+      if (!email) return json(res, 400, { error: "email is required" });
+      const order = await prisma.order.findFirst({ where: { orderNumber: orderNo, store: { slug: storeSlug, tenant: { slug: tenantSlug } }, customer: { email } }, select: { orderNumber: true, status: true, paymentStatus: true, paymentMethod: true, subtotal: true, total: true, currency: true, shippingName: true, shippingAddress: true, createdAt: true, items: { select: { name: true, quantity: true, unitPrice: true, total: true }, orderBy: { name: "asc" } } } });
+      if (!order) return json(res, 404, { error: "order_not_found" });
+      return json(res, 200, { ...order, subtotal: order.subtotal.toString(), total: order.total.toString(), createdAt: order.createdAt.toISOString(), items: order.items.map(item => ({ ...item, unitPrice: item.unitPrice.toString(), total: item.total.toString() })) });
     }
 
     const context = getRequestContext(req.headers); const tenantId = requireTenant(context);
@@ -42,12 +50,13 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (customerMatch && req.method === "GET") { const customer = await prisma.customer.findFirst({ where: { id: customerMatch[1], tenantId }, include: { orders: { orderBy: { createdAt: "desc" }, include: { store: true, items: true } } } }); if (!customer) return json(res, 404, { error: "customer_not_found" }); const totalSpend = customer.orders.reduce((sum, order) => sum + Number(order.total), 0); return json(res, 200, { ...customer, orderCount: customer.orders.length, totalSpend: totalSpend.toFixed(2) }); }
     if (url.pathname === "/customers" && req.method === "POST") { const input = await body(req); const email = input.email ? String(input.email).trim().toLowerCase() : null; const phone = input.phone ? String(input.phone).trim() : null; if (!email && !phone) return json(res, 400, { error: "email or phone is required" }); const existing = await prisma.customer.findFirst({ where: { tenantId, OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])] } }); if (existing) return json(res, 200, existing); return json(res, 201, await prisma.customer.create({ data: { tenantId, email, phone, firstName: input.firstName, lastName: input.lastName } })); }
     if (url.pathname === "/orders" && req.method === "GET") return json(res, 200, await prisma.order.findMany({ where: { tenantId }, include: { customer: true, store: true, items: true }, orderBy: { createdAt: "desc" }, take: 100 }));
+    const orderStatusMatch = url.pathname.match(/^\/orders\/([^/]+)\/status$/);
+    if (orderStatusMatch && req.method === "PATCH") { const input = await body(req); const status = String(input.status ?? ""); if (!orderStatuses.includes(status as typeof orderStatuses[number])) return json(res, 400, { error: "invalid_order_status" }); const order = await prisma.order.findFirst({ where: { id: orderStatusMatch[1], tenantId } }); if (!order) return json(res, 404, { error: "order_not_found" }); const updated = await prisma.order.update({ where: { id: order.id }, data: { status: status as typeof order.status } }); return json(res, 200, { id: updated.id, orderNumber: updated.orderNumber, status: updated.status }); }
     if (url.pathname === "/orders" && req.method === "POST") {
       const input = await body(req); if (!input.storeId || !Array.isArray(input.items) || input.items.length === 0) return json(res, 400, { error: "storeId and at least one item are required" });
       const store = await prisma.store.findFirst({ where: { id: input.storeId, tenantId } }); if (!store) return json(res, 404, { error: "store_not_found" });
       const paymentMethod = input.paymentMethod ?? "COD"; if (!["COD", "MANUAL_BANK", "CARD", "WALLET"].includes(paymentMethod)) return json(res, 400, { error: "invalid_payment_method" });
-      const shippingName = input.shippingName ?? input.customer?.name ?? null; const shippingPhone = input.shippingPhone ?? input.customer?.phone ?? null; const shippingAddress = input.shippingAddress ?? input.customer?.address ?? null;
-      if (!shippingName || !shippingPhone || !shippingAddress) return json(res, 400, { error: "shipping name, phone and address are required" });
+      const shippingName = input.shippingName ?? input.customer?.name ?? null; const shippingPhone = input.shippingPhone ?? input.customer?.phone ?? null; const shippingAddress = input.shippingAddress ?? input.customer?.address ?? null; if (!shippingName || !shippingPhone || !shippingAddress) return json(res, 400, { error: "shipping name, phone and address are required" });
       const created = await prisma.$transaction(async tx => { let customerId: string | undefined; const email = input.customer?.email ? String(input.customer.email).trim().toLowerCase() : null; const phone = input.customer?.phone ? String(input.customer.phone).trim() : null; if (input.customerId) { const customer = await tx.customer.findFirst({ where: { id: input.customerId, tenantId } }); if (!customer) throw new Error("CUSTOMER_NOT_FOUND"); customerId = customer.id; } else if (email || phone) { const customer = await tx.customer.findFirst({ where: { tenantId, OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])] } }); if (customer) customerId = customer.id; else customerId = (await tx.customer.create({ data: { tenantId, email, phone, firstName: input.customer?.firstName, lastName: input.customer?.lastName } })).id; }
         const orderItems: { productId: string; variantId: string; name: string; quantity: number; unitPrice: number; total: number }[] = []; let subtotal = 0;
         for (const rawItem of input.items) { const quantity = Number(rawItem.quantity); if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("INVALID_QUANTITY"); const variant = await tx.productVariant.findFirst({ where: { id: rawItem.variantId }, include: { product: { include: { store: true } } } }); if (!variant || variant.product.store.tenantId !== tenantId || variant.product.storeId !== store.id) throw new Error("ITEM_NOT_FOUND"); const price = Number(variant.price); const total = price * quantity; const updated = await tx.productVariant.updateMany({ where: { id: variant.id, stock: { gte: quantity } }, data: { stock: { decrement: quantity } } }); if (updated.count !== 1) throw new Error("INSUFFICIENT_STOCK"); orderItems.push({ productId: variant.productId, variantId: variant.id, name: variant.product.name, quantity, unitPrice: price, total }); subtotal += total; }
