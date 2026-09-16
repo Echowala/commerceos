@@ -1,1 +1,1 @@
-{"name":"@commerceos/api","private":true,"type":"module","scripts":{"dev":"tsx watch src/server.ts","build":"tsc","typecheck":"tsc --noEmit"},"devDependencies":{"tsx":"latest","typescript":"latest"}}
+{"name":"@commerceos/api","private":true,"type":"module","scripts":{"dev":"tsx watch src/server.ts","build":"tsc","typecheck":"tsc --noEmit"},"dependencies":{"@commerceos/database":"workspace:*","@prisma/client":"latest"},"devDependencies":{"tsx":"latest","typescript":"latest"}}
