@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { api, clearToken } from "../../lib/api";
 
 type Store = { id: string; name: string; currency: string };
-type Product = { id: string; name: string; slug: string; status: string; variants: { sku: string; price: string | number; stock: number }[] };
+type Product = { id: string; name: string; slug: string; status: string; variants: { id: string; sku: string; price: string | number; stock: number }[] };
 
 export default function ProductsPage() {
   const [stores, setStores] = useState<Store[]>([]);
@@ -15,6 +15,7 @@ export default function ProductsPage() {
   const [price, setPrice] = useState("");
   const [stock, setStock] = useState("0");
   const [status, setStatus] = useState("DRAFT");
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -29,13 +30,26 @@ export default function ProductsPage() {
 
   useEffect(() => { void load(); }, []);
 
-  const createProduct = async (event: FormEvent) => {
+  const resetForm = () => { setEditingId(null); setName(""); setSku(""); setPrice(""); setStock("0"); setStatus("DRAFT"); };
+
+  const startEdit = (product: Product) => {
+    const variant = product.variants[0];
+    setEditingId(product.id); setStoreId((product as Product & { storeId?: string }).storeId ?? storeId); setName(product.name); setSku(variant?.sku ?? ""); setPrice(variant ? String(variant.price) : ""); setStock(variant ? String(variant.stock) : "0"); setStatus(product.status); setError("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const submitProduct = async (event: FormEvent) => {
     event.preventDefault(); setSaving(true); setError("");
     try {
-      const product = await api<Product>("/products", { method: "POST", body: JSON.stringify({ storeId, name: name.trim(), variant: { sku: sku.trim(), price: Number(price), stock: Number(stock) }, status }) });
-      setProducts(current => [product, ...current]);
-      setName(""); setSku(""); setPrice(""); setStock("0"); setStatus("DRAFT");
-    } catch (e) { setError(e instanceof Error ? e.message : "Unable to create product"); }
+      if (editingId) {
+        const updated = await api<Product>(`/products/${editingId}`, { method: "PATCH", body: JSON.stringify({ name: name.trim(), variant: { sku: sku.trim(), price: Number(price), stock: Number(stock) }, status }) });
+        setProducts(current => current.map(product => product.id === updated.id ? updated : product));
+      } else {
+        const product = await api<Product>("/products", { method: "POST", body: JSON.stringify({ storeId, name: name.trim(), variant: { sku: sku.trim(), price: Number(price), stock: Number(stock) }, status }) });
+        setProducts(current => [product, ...current]);
+      }
+      resetForm();
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to save product"); }
     finally { setSaving(false); }
   };
 
@@ -46,19 +60,19 @@ export default function ProductsPage() {
     <section className="main">
       <header className="header"><div><h1 className="title">Products</h1><div className="muted">Manage your catalog, pricing and available stock.</div></div><a className="back-link" href="/">Dashboard</a></header>
       {error && <p className="error">{error}</p>}
-      <section className="section"><div className="detail-header"><div><h2>Add product</h2><p className="muted">Create the first sellable variant for a product.</p></div></div>
-        {stores.length === 0 ? <p className="muted">Create a store before adding products.</p> : <form onSubmit={createProduct} className="tracking-form">
-          <label>Store<select className="status-select" value={storeId} onChange={e => setStoreId(e.target.value)}>{stores.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>
+      <section className="section"><div className="detail-header"><div><h2>{editingId ? "Edit product" : "Add product"}</h2><p className="muted">{editingId ? "Update catalog details and the first sellable variant." : "Create the first sellable variant for a product."}</p></div>{editingId && <button className="back-link" type="button" onClick={resetForm}>Cancel</button>}</div>
+        {stores.length === 0 ? <p className="muted">Create a store before adding products.</p> : <form onSubmit={submitProduct} className="tracking-form">
+          {!editingId && <label>Store<select className="status-select" value={storeId} onChange={e => setStoreId(e.target.value)}>{stores.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}
           <label>Product name<input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Classic T-Shirt" required /></label>
           <label>SKU<input value={sku} onChange={e => setSku(e.target.value)} placeholder="e.g. TS-BLK-M" required /></label>
           <label>Price<input type="number" min="0" step="0.01" value={price} onChange={e => setPrice(e.target.value)} placeholder="0.00" required /></label>
           <label>Stock<input type="number" min="0" step="1" value={stock} onChange={e => setStock(e.target.value)} required /></label>
           <label>Status<select className="status-select" value={status} onChange={e => setStatus(e.target.value)}><option value="DRAFT">Draft</option><option value="ACTIVE">Active</option><option value="ARCHIVED">Archived</option></select></label>
-          <button className="checkout-button" disabled={saving || !storeId}>{saving ? "Creating…" : "Create product"}</button>
+          <button className="checkout-button" disabled={saving || (!editingId && !storeId)}>{saving ? "Saving…" : editingId ? "Save changes" : "Create product"}</button>
         </form>}
       </section>
       <section className="section"><div className="detail-header"><div><h2>Catalog</h2><p className="muted">{products.length} product{products.length === 1 ? "" : "s"} in this workspace.</p></div></div>
-        {products.length === 0 ? <p className="muted">No products yet.</p> : <div className="table-wrap"><table><thead><tr><th>Product</th><th>SKU</th><th>Price</th><th>Stock</th><th>Status</th></tr></thead><tbody>{products.map(product => { const variant = product.variants[0]; return <tr key={product.id}><td><strong>{product.name}</strong><div className="muted small">/{product.slug}</div></td><td>{variant?.sku ?? "—"}</td><td>{variant?.price ?? "0"}</td><td>{variant?.stock ?? 0}</td><td><span className="badge">{product.status}</span></td></tr>; })}</tbody></table></div>}
+        {products.length === 0 ? <p className="muted">No products yet.</p> : <div className="table-wrap"><table><thead><tr><th>Product</th><th>SKU</th><th>Price</th><th>Stock</th><th>Status</th><th>Action</th></tr></thead><tbody>{products.map(product => { const variant = product.variants[0]; return <tr key={product.id}><td><strong>{product.name}</strong><div className="muted small">/{product.slug}</div></td><td>{variant?.sku ?? "—"}</td><td>{variant?.price ?? "0"}</td><td>{variant?.stock ?? 0}</td><td><span className="badge">{product.status}</span></td><td><button className="back-link" type="button" onClick={() => startEdit(product)}>Edit</button></td></tr>; })}</tbody></table></div>}
       </section>
     </section>
   </main>;
