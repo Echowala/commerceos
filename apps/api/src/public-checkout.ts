@@ -18,6 +18,7 @@ export async function createPublicOrder(input: any, tenantSlug: string, storeSlu
     const customer = await tx.customer.findFirst({ where: { tenantId: store.tenantId, email } });
     const customerId = customer?.id ?? (await tx.customer.create({ data: { tenantId: store.tenantId, email, phone: shippingPhone, firstName: shippingName } })).id;
     const orderItems: { productId: string; variantId: string; name: string; quantity: number; unitPrice: number; total: number }[] = [];
+    const movements: { productId: string; variantId: string; quantity: number; stockBefore: number; stockAfter: number }[] = [];
     let subtotal = 0;
     for (const raw of input.items) {
       const quantity = Number(raw.quantity);
@@ -26,10 +27,14 @@ export async function createPublicOrder(input: any, tenantSlug: string, storeSlu
       if (!variant) throw new Error("ITEM_NOT_FOUND");
       const updated = await tx.productVariant.updateMany({ where: { id: variant.id, stock: { gte: quantity } }, data: { stock: { decrement: quantity } } });
       if (updated.count !== 1) throw new Error("INSUFFICIENT_STOCK");
+      const stockAfter = variant.stock - quantity;
       const unitPrice = Number(variant.price); const total = unitPrice * quantity;
       orderItems.push({ productId: variant.productId, variantId: variant.id, name: variant.product.name, quantity, unitPrice, total });
+      movements.push({ productId: variant.productId, variantId: variant.id, quantity: -quantity, stockBefore: variant.stock, stockAfter });
       subtotal += total;
     }
-    return tx.order.create({ data: { tenantId: store.tenantId, storeId: store.id, customerId, orderNumber: orderNumber(), status: "CONFIRMED", paymentStatus: "PENDING", paymentMethod: "COD", subtotal, total: subtotal, currency: store.currency, shippingName, shippingPhone, shippingAddress, items: { create: orderItems } } });
+    const order = await tx.order.create({ data: { tenantId: store.tenantId, storeId: store.id, customerId, orderNumber: orderNumber(), status: "CONFIRMED", paymentStatus: "PENDING", paymentMethod: "COD", subtotal, total: subtotal, currency: store.currency, shippingName, shippingPhone, shippingAddress, items: { create: orderItems } } });
+    await tx.inventoryMovement.createMany({ data: movements.map(movement => ({ tenantId: store.tenantId, productId: movement.productId, variantId: movement.variantId, type: "SALE", quantity: movement.quantity, stockBefore: movement.stockBefore, stockAfter: movement.stockAfter, referenceId: order.id, reason: `Order ${order.orderNumber}` })) });
+    return order;
   });
 }
