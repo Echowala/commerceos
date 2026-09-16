@@ -12,6 +12,7 @@ enum ProductStatus { DRAFT ACTIVE ARCHIVED }
 enum OrderStatus { PENDING CONFIRMED PROCESSING SHIPPED DELIVERED CANCELLED REFUNDED }
 enum PaymentStatus { PENDING PAID FAILED REFUNDED PARTIALLY_REFUNDED }
 enum PaymentMethod { COD MANUAL_BANK CARD WALLET }
+enum InventoryMovementType { RECEIVE ADJUSTMENT SALE RETURN RESTOCK }
 
 model Tenant {
   id String @id @default(cuid())
@@ -23,6 +24,7 @@ model Tenant {
   stores Store[]
   customers Customer[]
   orders Order[]
+  inventoryMovements InventoryMovement[]
 }
 
 model User {
@@ -65,6 +67,7 @@ model Product {
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
   variants ProductVariant[]
   orderItems OrderItem[]
+  inventoryMovements InventoryMovement[]
   @@unique([storeId, slug])
   @@index([storeId, status])
 }
@@ -79,6 +82,7 @@ model ProductVariant {
   updatedAt DateTime @updatedAt
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
   orderItems OrderItem[]
+  inventoryMovements InventoryMovement[]
   @@unique([productId, sku])
   @@index([sku])
 }
@@ -139,4 +143,25 @@ model OrderItem {
   variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
   @@index([orderId])
   @@index([productId])
+}
+
+model InventoryMovement {
+  id String @id @default(cuid())
+  tenantId String
+  productId String
+  variantId String
+  type InventoryMovementType
+  quantity Int
+  stockBefore Int
+  stockAfter Int
+  reason String?
+  referenceId String?
+  createdByUserId String?
+  createdAt DateTime @default(now())
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  @@index([tenantId, createdAt])
+  @@index([variantId, createdAt])
+  @@index([referenceId])
 }
