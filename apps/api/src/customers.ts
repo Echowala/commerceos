@@ -15,9 +15,9 @@ const readBody = async (req: IncomingMessage) => {
   return raw ? JSON.parse(raw) : {};
 };
 
-const money = (value: unknown) => Number(value ?? 0).toFixed(2);
-const excludedSpendStatuses = new Set<string>(["CANCELLED", "REFUNDED"]);
-const normalizeOptional = (value: unknown) => {
+const money = (value: unknown): string => Number(value ?? 0).toFixed(2);
+const isExcludedSpendStatus = (status: string): boolean => status === "CANCELLED" || status === "REFUNDED";
+const normalizeOptional = (value: unknown): string | null => {
   if (value == null) return null;
   const normalized = String(value).trim();
   return normalized || null;
@@ -49,7 +49,7 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
         if (!order.customerId) continue;
         const current = metrics.get(order.customerId) ?? { orderCount: 0, totalSpend: 0, lastOrderAt: null };
         current.orderCount += 1;
-        if (!excludedSpendStatuses.has(order.status)) current.totalSpend += Number(order.total);
+        if (!isExcludedSpendStatus(String(order.status))) current.totalSpend += Number(order.total);
         if (!current.lastOrderAt || order.createdAt > current.lastOrderAt) current.lastOrderAt = order.createdAt;
         metrics.set(order.customerId, current);
       }
@@ -102,19 +102,16 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
         select: {
           id: true, email: true, phone: true, firstName: true, lastName: true, createdAt: true, updatedAt: true,
           orders: {
-            where: { tenantId },
-            orderBy: { createdAt: "desc" },
-            select: {
-              id: true, orderNumber: true, status: true, paymentStatus: true, total: true, currency: true, createdAt: true,
+            where: { tenantId }, orderBy: { createdAt: "desc" },
+            select: { id: true, orderNumber: true, status: true, paymentStatus: true, total: true, currency: true, createdAt: true,
               store: { select: { id: true, name: true } },
-              items: { select: { id: true, name: true, quantity: true, unitPrice: true, total: true }, orderBy: { name: "asc" } },
-            },
+              items: { select: { id: true, name: true, quantity: true, unitPrice: true, total: true }, orderBy: { name: "asc" } } },
           },
         },
       });
       if (!customer) return json(res, 404, { error: "customer_not_found" });
 
-      const includedOrders = customer.orders.filter(order => !excludedSpendStatuses.has(order.status));
+      const includedOrders = customer.orders.filter(order => !isExcludedSpendStatus(String(order.status)));
       const totalSpend = includedOrders.reduce((sum, order) => sum + Number(order.total), 0);
       const averageOrderValue = includedOrders.length ? totalSpend / includedOrders.length : 0;
       const productCounts = new Map<string, { name: string; quantity: number }>();
@@ -129,18 +126,9 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
       const lastOrderAt = customer.orders[0]?.createdAt ?? null;
 
       return json(res, 200, {
-        ...customer,
-        orderCount: customer.orders.length,
-        totalSpend: money(totalSpend),
-        averageOrderValue: money(averageOrderValue),
-        lastOrderAt: lastOrderAt?.toISOString() ?? null,
-        topProducts,
-        orders: customer.orders.map(order => ({
-          ...order,
-          total: order.total.toString(),
-          createdAt: order.createdAt.toISOString(),
-          items: order.items.map(item => ({ ...item, unitPrice: item.unitPrice.toString(), total: item.total.toString() })),
-        })),
+        ...customer, orderCount: customer.orders.length, totalSpend: money(totalSpend), averageOrderValue: money(averageOrderValue),
+        lastOrderAt: lastOrderAt?.toISOString() ?? null, topProducts,
+        orders: customer.orders.map(order => ({ ...order, total: order.total.toString(), createdAt: order.createdAt.toISOString(), items: order.items.map(item => ({ ...item, unitPrice: item.unitPrice.toString(), total: item.total.toString() })) })),
       });
     }
 
