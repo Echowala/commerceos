@@ -72,6 +72,7 @@ model Tenant {
   inventoryMovements InventoryMovement[]
   customerTags CustomerTag[]
   customerSegments CustomerSegment[]
+  customerEvents CustomerEvent[]
 }
 
 model User {
