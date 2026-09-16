@@ -13,6 +13,7 @@ enum OrderStatus { PENDING CONFIRMED PROCESSING SHIPPED DELIVERED CANCELLED REFU
 enum PaymentStatus { PENDING PAID FAILED REFUNDED PARTIALLY_REFUNDED }
 enum PaymentMethod { COD MANUAL_BANK CARD WALLET }
 enum InventoryMovementType { RECEIVE ADJUSTMENT SALE RETURN RESTOCK }
+enum CustomerEventType { ORDER_PLACED ORDER_STATUS_CHANGED CUSTOMER_CREATED NOTE }
 
 model Tenant {
   id String @id @default(cuid())
@@ -25,6 +26,7 @@ model Tenant {
   customers Customer[]
   orders Order[]
   inventoryMovements InventoryMovement[]
+  customerTags CustomerTag[]
 }
 
 model User {
@@ -98,9 +100,48 @@ model Customer {
   updatedAt DateTime @updatedAt
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   orders Order[]
+  tags CustomerTagAssignment[]
+  events CustomerEvent[]
   @@index([tenantId])
   @@index([tenantId, email])
   @@index([tenantId, phone])
+}
+
+model CustomerTag {
+  id String @id @default(cuid())
+  tenantId String
+  name String
+  color String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customers CustomerTagAssignment[]
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model CustomerTagAssignment {
+  customerId String
+  tagId String
+  createdAt DateTime @default(now())
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  tag CustomerTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  @@id([customerId, tagId])
+  @@index([tagId])
+}
+
+model CustomerEvent {
+  id String @id @default(cuid())
+  tenantId String
+  customerId String
+  type CustomerEventType
+  data Json?
+  createdAt DateTime @default(now())
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  @@index([tenantId, createdAt])
+  @@index([customerId, createdAt])
+  @@index([customerId, type, createdAt])
 }
 
 model Order {
