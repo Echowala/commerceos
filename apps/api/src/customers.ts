@@ -16,7 +16,7 @@ const readBody = async (req: IncomingMessage) => {
 };
 
 const money = (value: unknown) => Number(value ?? 0).toFixed(2);
-const spendStatuses = { not: ["CANCELLED", "REFUNDED"] as const };
+const excludedSpendStatuses = new Set<string>(["CANCELLED", "REFUNDED"]);
 const normalizeOptional = (value: unknown) => {
   if (value == null) return null;
   const normalized = String(value).trim();
@@ -49,7 +49,7 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
         if (!order.customerId) continue;
         const current = metrics.get(order.customerId) ?? { orderCount: 0, totalSpend: 0, lastOrderAt: null };
         current.orderCount += 1;
-        if (!spendStatuses.not.includes(order.status)) current.totalSpend += Number(order.total);
+        if (!excludedSpendStatuses.has(order.status)) current.totalSpend += Number(order.total);
         if (!current.lastOrderAt || order.createdAt > current.lastOrderAt) current.lastOrderAt = order.createdAt;
         metrics.set(order.customerId, current);
       }
@@ -114,7 +114,7 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
       });
       if (!customer) return json(res, 404, { error: "customer_not_found" });
 
-      const includedOrders = customer.orders.filter(order => !spendStatuses.not.includes(order.status));
+      const includedOrders = customer.orders.filter(order => !excludedSpendStatuses.has(order.status));
       const totalSpend = includedOrders.reduce((sum, order) => sum + Number(order.total), 0);
       const averageOrderValue = includedOrders.length ? totalSpend / includedOrders.length : 0;
       const productCounts = new Map<string, { name: string; quantity: number }>();
