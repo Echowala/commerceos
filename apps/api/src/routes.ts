@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { prisma } from "@commerceos/database";
 import { createToken, hashPassword } from "./auth.js";
 import { signup } from "./signup.js";
+import { createPublicOrder } from "./public-checkout.js";
 import { getRequestContext, requireTenant } from "./tenant.js";
 
 const json = (res: ServerResponse, status: number, body: unknown) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.end(JSON.stringify(body)); };
@@ -28,6 +29,12 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       const tenantSlug = decodeURIComponent(publicStoreMatch[1]); const storeSlug = decodeURIComponent(publicStoreMatch[2]);
       const store = await prisma.store.findFirst({ where: { slug: storeSlug, tenant: { slug: tenantSlug } }, select: { id: true, name: true, slug: true, currency: true, tenant: { select: { slug: true } }, products: { where: { status: "ACTIVE" }, include: { variants: { select: { id: true, sku: true, price: true, stock: true } } }, orderBy: { createdAt: "desc" } } } });
       return store ? json(res, 200, store) : json(res, 404, { error: "store_not_found" });
+    }
+    const publicCheckoutMatch = url.pathname.match(/^\/public\/stores\/([^/]+)\/([^/]+)\/orders$/);
+    if (publicCheckoutMatch && req.method === "POST") {
+      const tenantSlug = decodeURIComponent(publicCheckoutMatch[1]); const storeSlug = decodeURIComponent(publicCheckoutMatch[2]);
+      const created = await createPublicOrder(await body(req), tenantSlug, storeSlug);
+      return json(res, 201, { orderNumber: created.orderNumber, total: created.total.toString(), currency: created.currency, paymentMethod: created.paymentMethod, status: created.status });
     }
     const publicOrderMatch = url.pathname.match(/^\/public\/stores\/([^/]+)\/([^/]+)\/orders\/([^/]+)$/);
     if (publicOrderMatch && req.method === "GET") {
@@ -64,5 +71,5 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       }); return json(res, 201, { orderNumber: created.orderNumber, total: created.total.toString(), currency: created.currency, paymentMethod: created.paymentMethod, status: created.status });
     }
     return json(res, 404, { error: "not_found" });
-  } catch (error) { if (error instanceof Error && error.message === "UNAUTHORIZED") return json(res, 401, { error: "unauthorized" }); if (error instanceof Error && error.message === "CUSTOMER_NOT_FOUND") return json(res, 404, { error: "customer_not_found" }); if (error instanceof Error && error.message === "INVALID_QUANTITY") return json(res, 400, { error: "quantity must be a positive integer" }); if (error instanceof Error && error.message === "ITEM_NOT_FOUND") return json(res, 404, { error: "order_item_not_found" }); if (error instanceof Error && error.message === "INSUFFICIENT_STOCK") return json(res, 409, { error: "insufficient_stock" }); if (error instanceof SyntaxError) return json(res, 400, { error: "invalid_json" }); console.error(error); return json(res, 500, { error: "internal_server_error" }); }
+  } catch (error) { if (error instanceof Error && error.message === "UNAUTHORIZED") return json(res, 401, { error: "unauthorized" }); if (error instanceof Error && error.message === "CUSTOMER_NOT_FOUND") return json(res, 404, { error: "customer_not_found" }); if (error instanceof Error && error.message === "INVALID_QUANTITY") return json(res, 400, { error: "quantity must be a positive integer" }); if (error instanceof Error && error.message === "ITEM_NOT_FOUND") return json(res, 404, { error: "order_item_not_found" }); if (error instanceof Error && error.message === "INSUFFICIENT_STOCK") return json(res, 409, { error: "insufficient_stock" }); if (error instanceof Error && error.message === "ITEMS_REQUIRED") return json(res, 400, { error: "at least one item is required" }); if (error instanceof Error && error.message === "SHIPPING_REQUIRED") return json(res, 400, { error: "email, shipping name, phone and address are required" }); if (error instanceof Error && error.message === "STORE_NOT_FOUND") return json(res, 404, { error: "store_not_found" }); if (error instanceof SyntaxError) return json(res, 400, { error: "invalid_json" }); console.error(error); return json(res, 500, { error: "internal_server_error" }); }
 };
