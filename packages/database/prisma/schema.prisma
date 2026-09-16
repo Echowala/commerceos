@@ -28,6 +28,7 @@ model User {
   id String @id @default(cuid())
   tenantId String
   email String @unique
+  passwordHash String
   name String?
   role UserRole @default(STAFF)
   createdAt DateTime @default(now())
