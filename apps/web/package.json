@@ -1,0 +1,1 @@
+{"name":"@commerceos/web","private":true,"scripts":{"dev":"next dev","build":"next build","typecheck":"tsc --noEmit"},"dependencies":{"next":"latest","react":"latest","react-dom":"latest"},"devDependencies":{"typescript":"latest","@types/node":"latest","@types/react":"latest","@types/react-dom":"latest"}}
