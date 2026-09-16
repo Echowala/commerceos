@@ -1,0 +1,1 @@
+{"name":"commerceos","private":true,"packageManager":"pnpm@10.15.0","scripts":{"dev":"pnpm --parallel --filter @commerceos/web --filter @commerceos/api dev","build":"pnpm -r build","typecheck":"pnpm -r typecheck","lint":"pnpm -r lint"}}
