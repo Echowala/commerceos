@@ -19,7 +19,7 @@ type AdjustmentType = (typeof movementTypes)[number];
 
 export const handleInventoryRequest = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
   const url = new URL(req.url ?? "/", "http://localhost");
-  if (!url.pathname === false && !url.pathname.startsWith("/inventory")) return false;
+  if (!url.pathname.startsWith("/inventory")) return false;
 
   try {
     const tenantId = requireTenant(getRequestContext(req.headers));
@@ -36,7 +36,8 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
         },
         orderBy: { updatedAt: "desc" },
       });
-      const threshold = Math.max(0, Number(url.searchParams.get("lowStock") ?? 5));
+      const requestedThreshold = Number(url.searchParams.get("lowStock") ?? 5);
+      const threshold = Number.isFinite(requestedThreshold) ? Math.max(0, Math.floor(requestedThreshold)) : 5;
       return json(res, 200, {
         threshold,
         summary: {
@@ -72,7 +73,7 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
       const variantId = adjustMatch[1];
 
       const result = await prisma.$transaction(async (tx) => {
-        const variant = await tx.productVariant.findFirst({ where: { id: variantId, product: { store: { tenantId } } }, include: { product: { select: { id: true, name: true, storeId: true } } } });
+        const variant = await tx.productVariant.findFirst({ where: { id: variantId, product: { store: { tenantId } } }, include: { product: { select: { name: true } } } });
         if (!variant) throw new Error("INVENTORY_ITEM_NOT_FOUND");
         const nextStock = variant.stock + quantity;
         if (nextStock < 0) throw new Error("INSUFFICIENT_STOCK");
