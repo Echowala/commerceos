@@ -4,6 +4,7 @@ import { prisma } from "@commerceos/database";
 import { createToken, hashPassword } from "./auth.js";
 import { signup } from "./signup.js";
 import { createPublicOrder } from "./public-checkout.js";
+import { recordInventoryMovement } from "./inventory.js";
 import { getRequestContext, requireTenant } from "./tenant.js";
 
 const json = (res: ServerResponse, status: number, body: unknown) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.end(JSON.stringify(body)); };
@@ -55,7 +56,25 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (url.pathname === "/products" && req.method === "GET") return json(res, 200, await prisma.product.findMany({ where: { store: { tenantId } }, include: { variants: true }, orderBy: { createdAt: "desc" } }));
     const productMatch = url.pathname.match(/^\/products\/([^/]+)$/);
     if (productMatch && req.method === "GET") { const product = await prisma.product.findFirst({ where: { id: productMatch[1], store: { tenantId } }, include: { variants: true, store: { select: { id: true, name: true, currency: true } } } }); return product ? json(res, 200, product) : json(res, 404, { error: "product_not_found" }); }
-    if (url.pathname === "/products" && req.method === "POST") { const input = await body(req); if (!input.storeId || !input.name || !input.variant?.sku || input.variant?.price == null) return json(res, 400, { error: "storeId, name and variant sku/price are required" }); const store = await prisma.store.findFirst({ where: { id: input.storeId, tenantId } }); if (!store) return json(res, 404, { error: "store_not_found" }); const slug = slugify(input.slug ?? input.name); if (!slug) return json(res, 400, { error: "valid slug is required" }); const price = Number(input.variant.price); const stock = Number(input.variant.stock ?? 0); if (!Number.isFinite(price) || price < 0) return json(res, 400, { error: "price must be a non-negative number" }); if (!Number.isInteger(stock) || stock < 0) return json(res, 400, { error: "stock must be a non-negative integer" }); if (!productStatuses.includes((input.status ?? "DRAFT") as typeof productStatuses[number])) return json(res, 400, { error: "invalid_product_status" }); return json(res, 201, await prisma.product.create({ data: { storeId: store.id, name: String(input.name).trim(), slug, description: input.description, status: input.status ?? "DRAFT", variants: { create: { sku: String(input.variant.sku).trim(), price, stock } } }, include: { variants: true } })); }
+    if (url.pathname === "/products" && req.method === "POST") {
+      const input = await body(req); if (!input.storeId || !input.name || !input.variant?.sku || input.variant?.price == null) return json(res, 400, { error: "storeId, name and variant sku/price are required" });
+      const store = await prisma.store.findFirst({ where: { id: input.storeId, tenantId } }); if (!store) return json(res, 404, { error: "store_not_found" });
+      const slug = slugify(input.slug ?? input.name); if (!slug) return json(res, 400, { error: "valid slug is required" });
+      const price = Number(input.variant.price); const stock = Number(input.variant.stock ?? 0);
+      if (!Number.isFinite(price) || price < 0) return json(res, 400, { error: "price must be a non-negative number" });
+      if (!Number.isInteger(stock) || stock < 0) return json(res, 400, { error: "stock must be a non-negative integer" });
+      if (!productStatuses.includes((input.status ?? "DRAFT") as typeof productStatuses[number])) return json(res, 400, { error: "invalid_product_status" });
+      const created = await prisma.$transaction(async tx => {
+        const product = await tx.product.create({ data: { storeId: store.id, name: String(input.name).trim(), slug, description: input.description, status: input.status ?? "DRAFT", variants: { create: { sku: String(input.variant.sku).trim(), price, stock: 0 } } }, include: { variants: true } });
+        const variant = product.variants[0];
+        if (stock > 0 && variant) {
+          await tx.productVariant.update({ where: { id: variant.id }, data: { stock } });
+          await recordInventoryMovement(tx, { tenantId, productId: product.id, variantId: variant.id, type: "RECEIVE", quantity: stock, stockBefore: 0, stockAfter: stock, reason: "Initial product stock", createdByUserId: context.auth!.userId });
+        }
+        return tx.product.findUniqueOrThrow({ where: { id: product.id }, include: { variants: true } });
+      });
+      return json(res, 201, created);
+    }
     if (productMatch && req.method === "PATCH") {
       const input = await body(req); const product = await prisma.product.findFirst({ where: { id: productMatch[1], store: { tenantId } }, include: { variants: true } }); if (!product) return json(res, 404, { error: "product_not_found" });
       const data: { name?: string; slug?: string; description?: string | null; status?: typeof productStatuses[number] } = {};
@@ -66,11 +85,23 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       const variantInput = input.variant;
       if (variantInput !== undefined) {
         if (!product.variants[0]) return json(res, 400, { error: "product_variant_not_found" });
-        const variantData: { sku?: string; price?: number; stock?: number } = {};
+        const variantData: { sku?: string; price?: number } = {};
+        let targetStock: number | undefined;
         if (variantInput.sku !== undefined) { const sku = String(variantInput.sku).trim(); if (!sku) return json(res, 400, { error: "sku cannot be empty" }); variantData.sku = sku; }
         if (variantInput.price !== undefined) { const price = Number(variantInput.price); if (!Number.isFinite(price) || price < 0) return json(res, 400, { error: "price must be a non-negative number" }); variantData.price = price; }
-        if (variantInput.stock !== undefined) { const stock = Number(variantInput.stock); if (!Number.isInteger(stock) || stock < 0) return json(res, 400, { error: "stock must be a non-negative integer" }); variantData.stock = stock; }
-        const updated = await prisma.$transaction(async tx => { const updatedProduct = await tx.product.update({ where: { id: product.id }, data }); await tx.productVariant.update({ where: { id: product.variants[0].id }, data: variantData }); return tx.product.findUniqueOrThrow({ where: { id: updatedProduct.id }, include: { variants: true } }); });
+        if (variantInput.stock !== undefined) { const stock = Number(variantInput.stock); if (!Number.isInteger(stock) || stock < 0) return json(res, 400, { error: "stock must be a non-negative integer" }); targetStock = stock; }
+        const variantId = product.variants[0].id;
+        const currentStock = product.variants[0].stock;
+        const updated = await prisma.$transaction(async tx => {
+          const updatedProduct = await tx.product.update({ where: { id: product.id }, data });
+          if (Object.keys(variantData).length > 0) await tx.productVariant.update({ where: { id: variantId }, data: variantData });
+          if (targetStock !== undefined && targetStock !== currentStock) {
+            const delta = targetStock - currentStock;
+            await tx.productVariant.update({ where: { id: variantId }, data: { stock: targetStock } });
+            await recordInventoryMovement(tx, { tenantId, productId: product.id, variantId, type: "ADJUSTMENT", quantity: delta, stockBefore: currentStock, stockAfter: targetStock, reason: "Product stock edit", createdByUserId: context.auth!.userId });
+          }
+          return tx.product.findUniqueOrThrow({ where: { id: updatedProduct.id }, include: { variants: true } });
+        });
         return json(res, 200, updated);
       }
       return json(res, 200, await prisma.product.update({ where: { id: product.id }, data, include: { variants: true } }));
@@ -98,7 +129,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
               const stockBefore = variant.stock;
               const stockAfter = stockBefore + item.quantity;
               await tx.productVariant.update({ where: { id: variant.id }, data: { stock: { increment: item.quantity } } });
-              await tx.inventoryMovement.create({ data: { tenantId, productId: variant.productId, variantId: variant.id, type: "RETURN", quantity: item.quantity, stockBefore, stockAfter, referenceId: order.id, reason: `${status} order ${order.orderNumber}`, createdByUserId: context.auth!.userId } });
+              await recordInventoryMovement(tx, { tenantId, productId: variant.productId, variantId: variant.id, type: "RETURN", quantity: item.quantity, stockBefore, stockAfter, referenceId: order.id, reason: `${status} order ${order.orderNumber}`, createdByUserId: context.auth!.userId });
             }
           }
         }
