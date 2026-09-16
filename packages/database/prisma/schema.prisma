@@ -7,13 +7,57 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum UserRole { OWNER ADMIN STAFF }
-enum ProductStatus { DRAFT ACTIVE ARCHIVED }
-enum OrderStatus { PENDING CONFIRMED PROCESSING SHIPPED DELIVERED CANCELLED REFUNDED }
-enum PaymentStatus { PENDING PAID FAILED REFUNDED PARTIALLY_REFUNDED }
-enum PaymentMethod { COD MANUAL_BANK CARD WALLET }
-enum InventoryMovementType { RECEIVE ADJUSTMENT SALE RETURN RESTOCK }
-enum CustomerEventType { ORDER_PLACED ORDER_STATUS_CHANGED CUSTOMER_CREATED NOTE }
+enum UserRole {
+  OWNER
+  ADMIN
+  STAFF
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentMethod {
+  COD
+  MANUAL_BANK
+  CARD
+  WALLET
+}
+
+enum InventoryMovementType {
+  RECEIVE
+  ADJUSTMENT
+  SALE
+  RETURN
+  RESTOCK
+}
+
+enum CustomerEventType {
+  ORDER_PLACED
+  ORDER_STATUS_CHANGED
+  CUSTOMER_CREATED
+  NOTE
+}
 
 model Tenant {
   id String @id @default(cuid())
