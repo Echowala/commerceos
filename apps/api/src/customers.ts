@@ -8,8 +8,20 @@ const json = (res: ServerResponse, status: number, body: unknown) => {
   res.end(JSON.stringify(body));
 };
 
+const readBody = async (req: IncomingMessage) => {
+  let raw = "";
+  for await (const chunk of req) raw += chunk;
+  if (raw.length > 100_000) throw new Error("PAYLOAD_TOO_LARGE");
+  return raw ? JSON.parse(raw) : {};
+};
+
 const money = (value: unknown) => Number(value ?? 0).toFixed(2);
 const spendStatuses = { not: ["CANCELLED", "REFUNDED"] as const };
+const normalizeOptional = (value: unknown) => {
+  if (value == null) return null;
+  const normalized = String(value).trim();
+  return normalized || null;
+};
 
 export const handleCustomersRequest = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -49,6 +61,41 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
     }
 
     const match = url.pathname.match(/^\/customers\/([^/]+)$/);
+    if (match && req.method === "PATCH") {
+      const existing = await prisma.customer.findFirst({ where: { id: match[1], tenantId }, select: { id: true } });
+      if (!existing) return json(res, 404, { error: "customer_not_found" });
+      const input = await readBody(req);
+      const data: { email?: string | null; phone?: string | null; firstName?: string | null; lastName?: string | null } = {};
+      if (input.email !== undefined) {
+        const email = normalizeOptional(input.email)?.toLowerCase() ?? null;
+        if (email && (!email.includes("@") || email.length > 320)) return json(res, 400, { error: "invalid_email" });
+        data.email = email;
+      }
+      if (input.phone !== undefined) {
+        const phone = normalizeOptional(input.phone);
+        if (phone && phone.length > 40) return json(res, 400, { error: "invalid_phone" });
+        data.phone = phone;
+      }
+      if (input.firstName !== undefined) {
+        const firstName = normalizeOptional(input.firstName);
+        if (firstName && firstName.length > 120) return json(res, 400, { error: "invalid_first_name" });
+        data.firstName = firstName;
+      }
+      if (input.lastName !== undefined) {
+        const lastName = normalizeOptional(input.lastName);
+        if (lastName && lastName.length > 120) return json(res, 400, { error: "invalid_last_name" });
+        data.lastName = lastName;
+      }
+      if (Object.keys(data).length === 0) return json(res, 400, { error: "no_customer_fields" });
+      if (data.email === null && data.phone === null) return json(res, 400, { error: "email_or_phone_required" });
+      if (data.email) {
+        const duplicate = await prisma.customer.findFirst({ where: { tenantId, email: data.email, id: { not: existing.id } }, select: { id: true } });
+        if (duplicate) return json(res, 409, { error: "customer_email_exists" });
+      }
+      const updated = await prisma.customer.update({ where: { id: existing.id }, data, select: { id: true, email: true, phone: true, firstName: true, lastName: true, createdAt: true, updatedAt: true } });
+      return json(res, 200, updated);
+    }
+
     if (match && req.method === "GET") {
       const customer = await prisma.customer.findFirst({
         where: { id: match[1], tenantId },
@@ -101,6 +148,7 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message === "UNAUTHORIZED") return json(res, 401, { error: "unauthorized" });
+    if (message === "PAYLOAD_TOO_LARGE") return json(res, 413, { error: "payload_too_large" });
     return json(res, 500, { error: "internal_server_error" });
   }
 };
