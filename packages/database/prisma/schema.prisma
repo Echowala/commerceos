@@ -110,6 +110,7 @@ model Order {
   customerId String?
   orderNumber String
   idempotencyKey String?
+  idempotencyFingerprint String?
   status OrderStatus @default(PENDING)
   paymentStatus PaymentStatus @default(PENDING)
   paymentMethod PaymentMethod @default(COD)
