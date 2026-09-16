@@ -1,24 +1,21 @@
-const stats = [
-  ["Revenue", "PKR 0", "Today"],
-  ["Orders", "0", "Today"],
-  ["Customers", "0", "Total"],
-  ["Products", "0", "Active"],
-];
+"use client";
+
+import { useEffect, useState } from "react";
+import { api, clearToken } from "../lib/api";
+
+type Dashboard = { stores: number; products: number; orders: number; customers: number; revenue: string };
+type Store = { id: string; name: string; slug: string; currency: string };
+type Product = { id: string; name: string; status: string; variants: { sku: string; price: string | number; stock: number }[] };
 
 export default function Dashboard() {
-  return (
-    <main className="dashboard">
-      <aside className="sidebar">
-        <div className="brand">CommerceOS</div>
-        <nav className="nav">
-          <span className="active">Overview</span><span>Orders</span><span>Products</span><span>Customers</span><span>Inventory</span><span>Analytics</span><span>Automations</span><span>Settings</span>
-        </nav>
-      </aside>
-      <section className="main">
-        <header className="header"><div><h1 className="title">Good morning</h1><div className="muted">Your commerce command center.</div></div><div className="muted">Demo workspace</div></header>
-        <div className="cards">{stats.map(([label, value, hint]) => <div className="card" key={label}><div className="muted">{label}</div><div className="metric">{value}</div><small className="muted">{hint}</small></div>)}</div>
-        <div className="section"><h2>Commerce overview</h2><p className="muted">Connect your store to start seeing real orders, customers, products and AI-powered insights here.</p></div>
-      </section>
-    </main>
-  );
+  const [data, setData] = useState<Dashboard | null>(null);
+  const [store, setStore] = useState<Store | null>(null);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [error, setError] = useState("");
+  const load = async () => { try { const [d, stores, p] = await Promise.all([api<Dashboard>("/dashboard"), api<Store[]>("/stores"), api<Product[]>("/products")]); setData(d); setStore(stores[0] ?? null); setProducts(p.slice(0, 6)); } catch (e) { setError(e instanceof Error ? e.message : "Unable to load workspace"); } };
+  useEffect(() => { void load(); }, []);
+  const logout = () => { clearToken(); window.location.href = "/login"; };
+  const stats = data ? [["Revenue", `PKR ${data.revenue}`, "Paid orders"], ["Orders", String(data.orders), "All orders"], ["Customers", String(data.customers), "Total"], ["Products", String(data.products), "Active"]] : [];
+
+  return <main className="dashboard"><aside className="sidebar"><div className="brand">CommerceOS</div><nav className="nav"><a className="active" href="/">Overview</a><a href="/orders">Orders</a><a href="/customers">Customers</a><span>Products</span><span>Inventory</span><span>Analytics</span><span>Automations</span><span>Settings</span></nav><button className="logout" onClick={logout}>Log out</button></aside><section className="main"><header className="header"><div><h1 className="title">Commerce command center</h1><div className="muted">Live workspace data and operational signals.</div></div><div className="muted">{store?.name ?? "Workspace"}</div></header>{error && <p className="error">{error}</p>}<div className="cards">{stats.map(([label, value, hint]) => <div className="card" key={label}><div className="muted">{label}</div><div className="metric">{value}</div><small className="muted">{hint}</small></div>)}</div><section className="section"><div className="detail-header"><div><h2>Recent products</h2><p className="muted">Your latest catalog activity.</p></div><a className="back-link" href="/customers">Open CRM</a></div>{products.length === 0 ? <p className="muted">No products yet.</p> : products.map(p => <div className="product-row" key={p.id}><strong>{p.name}</strong><span className="muted">{p.variants[0]?.sku ?? "No SKU"} · PKR {p.variants[0]?.price ?? "0"} · {p.status}</span></div>)}</section><section className="section quick-links"><h2>Operations</h2><div className="quick-grid"><a href="/orders"><strong>Orders</strong><span>Review and manage customer orders</span></a><a href="/customers"><strong>Customers</strong><span>Open customer 360 and order history</span></a></div></section></section></main>;
 }
