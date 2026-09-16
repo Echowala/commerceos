@@ -4,6 +4,7 @@ import { handleRequest } from "./routes.js";
 import { handleInventoryRequest } from "./inventory.js";
 import { handleOrderStatusRequest } from "./order-status.js";
 import { handleCustomersRequest } from "./customers.js";
+import { handleCrmRequest } from "./crm.js";
 import { rateLimit } from "./rate-limit.js";
 
 const port = Number(process.env.PORT ?? 4000);
@@ -22,6 +23,10 @@ const server = createServer(async (req, res) => {
   }
   if ((req.url ?? "/").startsWith("/customers")) {
     const handled = await handleCustomersRequest(req, res);
+    if (handled) return;
+  }
+  if ((req.url ?? "/").startsWith("/crm/")) {
+    const handled = await handleCrmRequest(req, res);
     if (handled) return;
   }
   return handleRequest(req, res);
