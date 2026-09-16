@@ -17,7 +17,19 @@ const body = async (req: IncomingMessage) => {
 };
 
 const orderStatuses = ["PENDING", "CONFIRMED", "PROCESSING", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"] as const;
-const stockReleasingStatuses = new Set(["CANCELLED", "REFUNDED"]);
+type OrderStatus = (typeof orderStatuses)[number];
+
+const allowedTransitions: Record<OrderStatus, readonly OrderStatus[]> = {
+  PENDING: ["CONFIRMED", "CANCELLED"],
+  CONFIRMED: ["PROCESSING", "CANCELLED"],
+  PROCESSING: ["SHIPPED", "CANCELLED"],
+  SHIPPED: ["DELIVERED", "CANCELLED", "REFUNDED"],
+  DELIVERED: ["REFUNDED"],
+  CANCELLED: ["REFUNDED"],
+  REFUNDED: [],
+};
+
+const stockReleasingStatuses = new Set<OrderStatus>(["CANCELLED", "REFUNDED"]);
 
 export const handleOrderStatusRequest = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -32,81 +44,93 @@ export const handleOrderStatusRequest = async (req: IncomingMessage, res: Server
     const context = getRequestContext(req.headers);
     const tenantId = requireTenant(context);
     const input = await body(req);
-    const status = String(input.status ?? "");
-    if (!orderStatuses.includes(status as typeof orderStatuses[number])) return json(res, 400, { error: "invalid_order_status" }) as never;
+    const status = String(input.status ?? "") as OrderStatus;
+    if (!orderStatuses.includes(status)) return json(res, 400, { error: "invalid_order_status" }) as never;
 
-    const order = await prisma.order.findFirst({
-      where: { id: match[1], tenantId },
-      include: { items: true },
-    });
-    if (!order) return json(res, 404, { error: "order_not_found" }) as never;
-    if (order.status === status) return json(res, 200, { id: order.id, orderNumber: order.orderNumber, status: order.status }) as never;
+    const result = await prisma.$transaction(async tx => {
+      const order = await tx.order.findFirst({
+        where: { id: match[1], tenantId },
+        include: { items: true },
+      });
+      if (!order) throw new Error("ORDER_NOT_FOUND");
+      if (order.status === status) return { id: order.id, orderNumber: order.orderNumber, status: order.status };
 
-    const shouldReleaseStock = stockReleasingStatuses.has(status) && !stockReleasingStatuses.has(order.status);
-    const updated = await prisma.$transaction(async tx => {
+      const currentStatus = order.status as OrderStatus;
+      if (!allowedTransitions[currentStatus].includes(status)) {
+        throw new Error(`INVALID_ORDER_TRANSITION:${currentStatus}:${status}`);
+      }
+
+      const shouldReleaseStock = stockReleasingStatuses.has(status) && !stockReleasingStatuses.has(currentStatus);
       if (shouldReleaseStock) {
-        // Claim the one-time stock release on the order row. Concurrent
-        // cancellation/refund requests can both reach this point, but only
-        // one transaction can change inventoryReleasedAt from NULL.
+        // Claim release inside the same transaction as the status transition.
+        // Only one concurrent request can change inventoryReleasedAt from NULL.
         const claimed = await tx.order.updateMany({
-          where: { id: order.id, tenantId, inventoryReleasedAt: null },
+          where: { id: order.id, tenantId, status: currentStatus, inventoryReleasedAt: null },
           data: { inventoryReleasedAt: new Date() },
         });
 
-        if (claimed.count === 1) {
-          // Multiple order lines may reference the same variant. Aggregate them
-          // so the inventory ledger gets exactly one RETURN movement per SKU.
-          const quantities = new Map<string, { productId: string; quantity: number }>();
-          for (const item of order.items) {
-            const existing = quantities.get(item.variantId);
-            if (existing) existing.quantity += item.quantity;
-            else quantities.set(item.variantId, { productId: item.productId, quantity: item.quantity });
-          }
+        if (claimed.count !== 1) throw new Error("ORDER_STATE_CONFLICT");
 
-          for (const [variantId, release] of quantities) {
-            const variant = await tx.productVariant.findFirst({
-              where: { id: variantId, product: { store: { tenantId } } },
-              select: { id: true, productId: true, stock: true },
-            });
-            if (!variant) throw new Error("ORDER_ITEM_NOT_FOUND");
+        // Aggregate duplicate lines so each SKU gets one RETURN ledger entry.
+        const quantities = new Map<string, { productId: string; quantity: number }>();
+        for (const item of order.items) {
+          const existing = quantities.get(item.variantId);
+          if (existing) existing.quantity += item.quantity;
+          else quantities.set(item.variantId, { productId: item.productId, quantity: item.quantity });
+        }
 
-            const stockBefore = variant.stock;
-            const stockAfter = stockBefore + release.quantity;
-            const guarded = await tx.productVariant.updateMany({
-              where: { id: variant.id, stock: stockBefore },
-              data: { stock: { increment: release.quantity } },
-            });
-            if (guarded.count !== 1) throw new Error("INVENTORY_CONFLICT");
+        for (const [variantId, release] of quantities) {
+          const variant = await tx.productVariant.findFirst({
+            where: { id: variantId, product: { store: { tenantId } } },
+            select: { id: true, productId: true, stock: true },
+          });
+          if (!variant) throw new Error("ORDER_ITEM_NOT_FOUND");
 
-            await recordInventoryMovement(tx, {
-              tenantId,
-              productId: variant.productId,
-              variantId: variant.id,
-              type: "RETURN",
-              quantity: release.quantity,
-              stockBefore,
-              stockAfter,
-              referenceId: order.id,
-              reason: `${status} order ${order.orderNumber}`,
-              createdByUserId: context.auth?.userId ?? null,
-            });
-          }
+          const stockBefore = variant.stock;
+          const stockAfter = stockBefore + release.quantity;
+          const guarded = await tx.productVariant.updateMany({
+            where: { id: variant.id, stock: stockBefore },
+            data: { stock: { increment: release.quantity } },
+          });
+          if (guarded.count !== 1) throw new Error("INVENTORY_CONFLICT");
+
+          await recordInventoryMovement(tx, {
+            tenantId,
+            productId: variant.productId,
+            variantId: variant.id,
+            type: "RETURN",
+            quantity: release.quantity,
+            stockBefore,
+            stockAfter,
+            referenceId: order.id,
+            reason: `${status} order ${order.orderNumber}`,
+            createdByUserId: context.auth?.userId ?? null,
+          });
         }
       }
 
-      return tx.order.update({
-        where: { id: order.id },
-        data: { status: status as typeof orderStatuses[number] },
+      const updated = await tx.order.updateMany({
+        where: { id: order.id, tenantId, status: currentStatus },
+        data: { status },
       });
+      if (updated.count !== 1) throw new Error("ORDER_STATE_CONFLICT");
+
+      return { id: order.id, orderNumber: order.orderNumber, status };
     });
 
-    return json(res, 200, { id: updated.id, orderNumber: updated.orderNumber, status: updated.status }) as never;
+    return json(res, 200, result) as never;
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message === "UNAUTHORIZED") return json(res, 401, { error: "unauthorized" }) as never;
     if (message === "PAYLOAD_TOO_LARGE") return json(res, 413, { error: "payload_too_large" }) as never;
+    if (message === "ORDER_NOT_FOUND") return json(res, 404, { error: "order_not_found" }) as never;
+    if (message.startsWith("INVALID_ORDER_TRANSITION:")) {
+      const [, from, to] = message.split(":");
+      return json(res, 409, { error: "invalid_order_transition", from, to }) as never;
+    }
     if (message === "ORDER_ITEM_NOT_FOUND") return json(res, 409, { error: "order_item_not_found" }) as never;
     if (message === "INVENTORY_CONFLICT") return json(res, 409, { error: "inventory_conflict", message: "Stock changed while the order inventory was being released. Please retry." }) as never;
+    if (message === "ORDER_STATE_CONFLICT") return json(res, 409, { error: "order_state_conflict", message: "Order status changed while this update was being processed. Please retry." }) as never;
     return json(res, 500, { error: "internal_server_error" }) as never;
   }
 };
