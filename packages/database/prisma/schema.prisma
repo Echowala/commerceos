@@ -109,6 +109,7 @@ model Order {
   storeId String
   customerId String?
   orderNumber String
+  idempotencyKey String?
   status OrderStatus @default(PENDING)
   paymentStatus PaymentStatus @default(PENDING)
   paymentMethod PaymentMethod @default(COD)
@@ -125,6 +126,7 @@ model Order {
   customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
   items OrderItem[]
   @@unique([storeId, orderNumber])
+  @@unique([storeId, idempotencyKey])
   @@index([tenantId, createdAt])
   @@index([customerId, createdAt])
 }
