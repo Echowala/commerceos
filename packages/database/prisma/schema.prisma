@@ -27,6 +27,7 @@ model Tenant {
   orders Order[]
   inventoryMovements InventoryMovement[]
   customerTags CustomerTag[]
+  customerSegments CustomerSegment[]
 }
 
 model User {
@@ -142,6 +143,19 @@ model CustomerEvent {
   @@index([tenantId, createdAt])
   @@index([customerId, createdAt])
   @@index([customerId, type, createdAt])
+}
+
+model CustomerSegment {
+  id String @id @default(cuid())
+  tenantId String
+  name String
+  description String?
+  rules Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@unique([tenantId, name])
+  @@index([tenantId, createdAt])
 }
 
 model Order {
