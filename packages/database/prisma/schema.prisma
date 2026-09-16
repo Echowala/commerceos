@@ -111,6 +111,7 @@ model Order {
   orderNumber String
   idempotencyKey String?
   idempotencyFingerprint String?
+  inventoryReleasedAt DateTime?
   status OrderStatus @default(PENDING)
   paymentStatus PaymentStatus @default(PENDING)
   paymentMethod PaymentMethod @default(COD)
