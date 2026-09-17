@@ -6,6 +6,7 @@ import { handleOrderStatusRequest } from "./order-status.js";
 import { handleCustomersRequest } from "./customers.js";
 import { handleCrmRequest } from "./crm.js";
 import { handleSegmentsRequest } from "./segments.js";
+import { handleAutomationRequest } from "./automation.js";
 import { rateLimit } from "./rate-limit.js";
 
 const port = Number(process.env.PORT ?? 4000);
@@ -24,6 +25,10 @@ const server = createServer(async (req, res) => {
   }
   if ((req.url ?? "/").startsWith("/customers")) {
     const handled = await handleCustomersRequest(req, res);
+    if (handled) return;
+  }
+  if ((req.url ?? "/").startsWith("/automations")) {
+    const handled = await handleAutomationRequest(req, res);
     if (handled) return;
   }
   if ((req.url ?? "/").startsWith("/crm/segments")) {
