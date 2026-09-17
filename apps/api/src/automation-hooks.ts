@@ -30,11 +30,11 @@ export const triggerOrderStatusChangedAutomation = async (event: { tenantId: str
   });
 };
 
-export const triggerInventoryLowAutomation = async (event: { tenantId: string; productId: string; variantId: string; stock: number; threshold: number }) => {
+export const triggerInventoryLowAutomation = async (event: { tenantId: string; productId: string; variantId: string; stock: number; threshold: number; referenceId?: string | null }) => {
   await triggerAutomations({
     tenantId: event.tenantId,
     trigger: "INVENTORY_LOW",
-    eventId: `inventory:${event.variantId}:low:${event.threshold}`,
+    eventId: event.referenceId ? `inventory:${event.variantId}:low:${event.threshold}:${event.referenceId}` : undefined,
     data: { productId: event.productId, variantId: event.variantId, stock: event.stock, threshold: event.threshold },
   });
 };
