@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getRequestContext, requireTenant } from "./tenant.js";
 import { prisma } from "@commerceos/database";
+import { triggerInventoryLowAutomation } from "./automation-hooks.js";
 
 const json = (res: ServerResponse, status: number, body: unknown) => {
   res.statusCode = status;
@@ -16,6 +17,7 @@ const readBody = async (req: IncomingMessage) => {
 
 const movementTypes = ["RECEIVE", "ADJUSTMENT", "RETURN", "RESTOCK"] as const;
 type AdjustmentType = (typeof movementTypes)[number];
+const LOW_STOCK_THRESHOLD = 5;
 
 export const recordInventoryMovement = async (tx: any, input: {
   tenantId: string;
@@ -51,8 +53,8 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
         },
         orderBy: { updatedAt: "desc" },
       });
-      const requestedThreshold = Number(url.searchParams.get("lowStock") ?? 5);
-      const threshold = Number.isFinite(requestedThreshold) ? Math.max(0, Math.floor(requestedThreshold)) : 5;
+      const requestedThreshold = Number(url.searchParams.get("lowStock") ?? LOW_STOCK_THRESHOLD);
+      const threshold = Number.isFinite(requestedThreshold) ? Math.max(0, Math.floor(requestedThreshold)) : LOW_STOCK_THRESHOLD;
       return json(res, 200, {
         threshold,
         summary: {
@@ -97,9 +99,6 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
         const nextStock = variant.stock + quantity;
         if (nextStock < 0) throw new Error("INSUFFICIENT_STOCK");
 
-        // Optimistic concurrency guard: the update only succeeds if the stock
-        // value we read is still current. This prevents stale stockBefore/
-        // stockAfter ledger entries when multiple adjustments race.
         const updatedCount = await tx.productVariant.updateMany({
           where: { id: variant.id, stock: variant.stock },
           data: { stock: { increment: quantity } },
@@ -121,6 +120,10 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
         const updated = await tx.productVariant.findUniqueOrThrow({ where: { id: variant.id } });
         return { variant: updated, movement };
       });
+
+      if (result.variant.stock > 0 && result.variant.stock <= LOW_STOCK_THRESHOLD) {
+        void triggerInventoryLowAutomation({ tenantId, productId: result.variant.productId, variantId: result.variant.id, stock: result.variant.stock, threshold: LOW_STOCK_THRESHOLD }).catch(() => undefined);
+      }
       return json(res, 200, { ...result, variant: { ...result.variant, price: result.variant.price.toString() } }) as never;
     }
 
