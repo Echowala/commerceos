@@ -5,13 +5,14 @@ export type AutomationEvent = {
   tenantId: string;
   trigger: "ORDER_PLACED" | "ORDER_STATUS_CHANGED" | "CUSTOMER_CREATED" | "INVENTORY_LOW";
   customerId?: string | null;
+  eventId?: string;
   data: Record<string, unknown>;
 };
 
 type Condition = { field?: unknown; operator?: unknown; value?: unknown };
-
 type Action = { type: string; tagId?: string; note?: string; url?: string };
 
+const WEBHOOK_TIMEOUT_MS = 10_000;
 const asRecord = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const getPath = (data: Record<string, unknown>, path: string): unknown => path.split(".").reduce<unknown>((value, key) => asRecord(value)[key], data);
 
@@ -40,7 +41,7 @@ const matchesConditions = (data: Record<string, unknown>, conditions: unknown): 
   return true;
 };
 
-const executeAction = async (tx: Prisma.TransactionClient, tenantId: string, customerId: string | null | undefined, action: Action, event: AutomationEvent) => {
+const executeDatabaseAction = async (tx: Prisma.TransactionClient, tenantId: string, customerId: string | null | undefined, action: Action) => {
   if (action.type === "ADD_CUSTOMER_TAG") {
     if (!customerId || !action.tagId) return;
     const tag = await tx.customerTag.findFirst({ where: { id: action.tagId, tenantId }, select: { id: true } });
@@ -53,12 +54,28 @@ const executeAction = async (tx: Prisma.TransactionClient, tenantId: string, cus
     await tx.customerEvent.create({ data: { tenantId, customerId, type: "NOTE", data: { note: action.note, source: "automation" } } });
     return;
   }
-  if (action.type === "SEND_WEBHOOK") {
-    if (!action.url || !/^https:\/\//i.test(action.url)) throw new Error("AUTOMATION_WEBHOOK_URL_INVALID");
-    // External delivery is intentionally not performed inside the DB transaction.
-    return;
-  }
+  if (action.type === "SEND_WEBHOOK") return;
   throw new Error("AUTOMATION_ACTION_UNSUPPORTED");
+};
+
+const sendWebhook = async (tenantId: string, trigger: AutomationEvent["trigger"], eventId: string | undefined, action: Action, event: AutomationEvent) => {
+  if (!action.url || !/^https:\/\//i.test(action.url)) throw new Error("AUTOMATION_WEBHOOK_URL_INVALID");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
+  try {
+    const response = await fetch(action.url, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-commerceos-event": trigger, ...(eventId ? { "x-commerceos-event-id": eventId } : {}) },
+      body: JSON.stringify({ trigger, eventId: eventId ?? null, tenantId, customerId: event.customerId ?? null, data: event.data }),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`AUTOMATION_WEBHOOK_HTTP_${response.status}`);
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw new Error("AUTOMATION_WEBHOOK_TIMEOUT");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 };
 
 export const triggerAutomations = async (event: AutomationEvent): Promise<void> => {
@@ -68,12 +85,25 @@ export const triggerAutomations = async (event: AutomationEvent): Promise<void> 
     try {
       if (!matchesConditions(event.data, automation.conditions)) continue;
       const actions = Array.isArray(automation.actions) ? automation.actions as Action[] : [];
+      if (event.eventId) {
+        const existing = await prisma.automationExecution.findFirst({ where: { automationId: automation.id, triggerEventId: event.eventId }, select: { id: true } });
+        if (existing) continue;
+      }
+      const databaseActions = actions.filter(action => action.type !== "SEND_WEBHOOK");
+      const webhookActions = actions.filter(action => action.type === "SEND_WEBHOOK");
+      if (webhookActions.some(action => !action.url || !/^https:\/\//i.test(action.url))) throw new Error("AUTOMATION_WEBHOOK_URL_INVALID");
+
       await prisma.$transaction(async tx => {
-        for (const action of actions) await executeAction(tx, event.tenantId, event.customerId, action, event);
-        await tx.automationExecution.create({ data: { tenantId: event.tenantId, automationId: automation.id, status: "SUCCEEDED", startedAt, finishedAt: new Date(), input: event.data as Prisma.InputJsonValue, output: { actionCount: actions.length } } });
+        for (const action of databaseActions) await executeDatabaseAction(tx, event.tenantId, event.customerId, action);
+        await tx.automationExecution.create({ data: { tenantId: event.tenantId, automationId: automation.id, triggerEventId: event.eventId, status: "RUNNING", startedAt, input: { ...event.data, eventId: event.eventId ?? null } as Prisma.InputJsonValue, output: { databaseActionCount: databaseActions.length, webhookActionCount: webhookActions.length } } });
       });
+
+      for (const action of webhookActions) await sendWebhook(event.tenantId, event.trigger, event.eventId, action, event);
+
+      await prisma.automationExecution.updateMany({ where: { automationId: automation.id, ...(event.eventId ? { triggerEventId: event.eventId } : { startedAt }) }, data: { status: "SUCCEEDED", finishedAt: new Date(), output: { actionCount: actions.length, databaseActionCount: databaseActions.length, webhookActionCount: webhookActions.length } } });
     } catch (error) {
-      await prisma.automationExecution.create({ data: { tenantId: event.tenantId, automationId: automation.id, status: "FAILED", startedAt, finishedAt: new Date(), input: event.data as Prisma.InputJsonValue, error: error instanceof Error ? error.message : "automation_failed" } });
+      const message = error instanceof Error ? error.message : "automation_failed";
+      await prisma.automationExecution.updateMany({ where: { automationId: automation.id, ...(event.eventId ? { triggerEventId: event.eventId } : { startedAt }) }, data: { status: "FAILED", finishedAt: new Date(), error: message } });
     }
   }
 };
