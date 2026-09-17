@@ -66,6 +66,26 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
       return respond(res, 201, automation);
     }
 
+    const testMatch = url.pathname.match(/^\/automations\/([^/]+)\/test$/);
+    if (testMatch && req.method === "POST") {
+      const automation = await prisma.automation.findFirst({ where: { id: testMatch[1], tenantId }, select: { id: true, trigger: true, status: true, conditions: true, actions: true } });
+      if (!automation) return respond(res, 404, { error: "automation_not_found" });
+      const input = await readBody(req);
+      const eventData = input.data && typeof input.data === "object" && !Array.isArray(input.data) ? input.data as Record<string, unknown> : {};
+      const actions = Array.isArray(automation.actions) ? automation.actions as Array<Record<string, unknown>> : [];
+      const conditionRoot = automation.conditions && typeof automation.conditions === "object" && !Array.isArray(automation.conditions) ? automation.conditions as Record<string, unknown> : {};
+      return respond(res, 200, {
+        dryRun: true,
+        automationId: automation.id,
+        trigger: automation.trigger,
+        status: automation.status,
+        wouldRun: actions.length > 0,
+        conditionCount: (Array.isArray(conditionRoot.all) ? conditionRoot.all.length : 0) + (Array.isArray(conditionRoot.any) ? conditionRoot.any.length : 0),
+        actions: actions.map(action => ({ type: action.type, effect: action.type === "SEND_WEBHOOK" ? "webhook_not_sent" : action.type === "ADD_CUSTOMER_TAG" ? "tag_not_added" : "note_not_created" })),
+        sampleData: eventData,
+      });
+    }
+
     const match = url.pathname.match(/^\/automations\/([^/]+)$/);
     if (match && req.method === "PATCH") {
       const existing = await prisma.automation.findFirst({ where: { id: match[1], tenantId }, select: { id: true } });
@@ -100,6 +120,7 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
     const message = error instanceof Error ? error.message : "";
     if (message === "UNAUTHORIZED") return respond(res, 401, { error: "unauthorized" });
     if (message === "PAYLOAD_TOO_LARGE") return respond(res, 413, { error: "payload_too_large" });
+    if (error instanceof SyntaxError) return respond(res, 400, { error: "invalid_json" });
     return respond(res, 500, { error: "internal_server_error" });
   }
 };
