@@ -54,7 +54,7 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
         const existing = await tx.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
         if (existing) {
           if (existing.idempotencyFingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_REUSED");
-          return { order: existing, customerCreated: false };
+          return { order: existing, customerCreated: false, replayed: true };
         }
       }
 
@@ -92,14 +92,16 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
         ...(customerCreated ? [{ tenantId: store.tenantId, customerId: customer.id, type: "CUSTOMER_CREATED" as const, data: { source: "public_checkout" } }] : []),
         { tenantId: store.tenantId, customerId: customer.id, type: "ORDER_PLACED" as const, data: { orderId: order.id, orderNumber: order.orderNumber, total: order.total.toString(), currency: order.currency } },
       ] });
-      return { order, customerCreated };
+      return { order, customerCreated, replayed: false };
     });
 
-    if (result.customerCreated) {
-      void triggerCustomerCreatedAutomation({ tenantId: store.tenantId, customerId: result.order.customerId!, email }).catch(() => undefined);
+    if (!result.replayed) {
+      if (result.customerCreated) {
+        void triggerCustomerCreatedAutomation({ tenantId: store.tenantId, customerId: result.order.customerId!, email }).catch(() => undefined);
+      }
+      void triggerOrderPlacedAutomation({ tenantId: store.tenantId, customerId: result.order.customerId!, orderId: result.order.id, orderNumber: result.order.orderNumber, total: result.order.total.toString(), currency: result.order.currency }).catch(() => undefined);
     }
-    void triggerOrderPlacedAutomation({ tenantId: store.tenantId, customerId: result.order.customerId!, orderId: result.order.id, orderNumber: result.order.orderNumber, total: result.order.total.toString(), currency: result.order.currency }).catch(() => undefined);
-    return { order: result.order, replayed: false };
+    return { order: result.order, replayed: result.replayed };
   } catch (error) {
     if (idempotencyKey && error instanceof Error && error.message.includes("Order_storeId_idempotencyKey_key")) {
       const existing = await prisma.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
