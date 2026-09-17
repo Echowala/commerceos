@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { prisma } from "@commerceos/database";
 import { recordInventoryMovement } from "./inventory.js";
 import { getRequestContext, requireTenant } from "./tenant.js";
+import { triggerOrderStatusChangedAutomation } from "./automation-hooks.js";
 
 const json = (res: ServerResponse, status: number, body: unknown) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.end(JSON.stringify(body)); };
 const body = async (req: IncomingMessage) => { let raw = ""; for await (const chunk of req) raw += chunk; if (raw.length > 1_000_000) throw new Error("PAYLOAD_TOO_LARGE"); return raw ? JSON.parse(raw) : {}; };
@@ -18,7 +19,7 @@ export const handleOrderStatusRequest = async (req: IncomingMessage, res: Server
     if (!orderStatuses.includes(status)) return json(res, 400, { error: "invalid_order_status" }) as never;
     const result = await prisma.$transaction(async tx => {
       const order = await tx.order.findFirst({ where: { id: match[1], tenantId }, include: { items: true } });
-      if (!order) throw new Error("ORDER_NOT_FOUND"); if (order.status === status) return { id: order.id, orderNumber: order.orderNumber, status: order.status };
+      if (!order) throw new Error("ORDER_NOT_FOUND"); if (order.status === status) return { id: order.id, orderNumber: order.orderNumber, status: order.status, customerId: order.customerId, from: order.status as OrderStatus };
       const currentStatus = order.status as OrderStatus; if (!allowedTransitions[currentStatus].includes(status)) throw new Error(`INVALID_ORDER_TRANSITION:${currentStatus}:${status}`);
       const shouldReleaseStock = stockReleasingStatuses.has(status) && !stockReleasingStatuses.has(currentStatus);
       if (shouldReleaseStock) {
@@ -37,9 +38,12 @@ export const handleOrderStatusRequest = async (req: IncomingMessage, res: Server
       }
       const updated = await tx.order.updateMany({ where: { id: order.id, tenantId, status: currentStatus }, data: { status } }); if (updated.count !== 1) throw new Error("ORDER_STATE_CONFLICT");
       if (order.customerId) await tx.customerEvent.create({ data: { tenantId, customerId: order.customerId, type: "ORDER_STATUS_CHANGED", data: { orderId: order.id, orderNumber: order.orderNumber, from: currentStatus, to: status } } });
-      return { id: order.id, orderNumber: order.orderNumber, status };
+      return { id: order.id, orderNumber: order.orderNumber, status, customerId: order.customerId, from: currentStatus };
     });
-    return json(res, 200, result) as never;
+    if (result.from !== result.status) {
+      void triggerOrderStatusChangedAutomation({ tenantId, customerId: result.customerId, orderId: result.id, orderNumber: result.orderNumber, from: result.from, to: result.status }).catch(() => undefined);
+    }
+    return json(res, 200, { id: result.id, orderNumber: result.orderNumber, status: result.status }) as never;
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message === "UNAUTHORIZED") return json(res, 401, { error: "unauthorized" }) as never;
