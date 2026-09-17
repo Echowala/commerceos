@@ -118,13 +118,13 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
           createdByUserId: userId,
         });
         const updated = await tx.productVariant.findUniqueOrThrow({ where: { id: variant.id } });
-        return { variant: updated, movement };
+        return { variant: updated, movement, crossedIntoLowStock: variant.stock > LOW_STOCK_THRESHOLD && nextStock > 0 && nextStock <= LOW_STOCK_THRESHOLD };
       });
 
-      if (result.variant.stock > 0 && result.variant.stock <= LOW_STOCK_THRESHOLD) {
+      if (result.crossedIntoLowStock) {
         void triggerInventoryLowAutomation({ tenantId, productId: result.variant.productId, variantId: result.variant.id, stock: result.variant.stock, threshold: LOW_STOCK_THRESHOLD }).catch(() => undefined);
       }
-      return json(res, 200, { ...result, variant: { ...result.variant, price: result.variant.price.toString() } }) as never;
+      return json(res, 200, { ...result, crossedIntoLowStock: undefined, variant: { ...result.variant, price: result.variant.price.toString() } }) as never;
     }
 
     return json(res, 404, { error: "inventory_route_not_found" }) as never;
