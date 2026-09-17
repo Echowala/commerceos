@@ -59,6 +59,25 @@ enum CustomerEventType {
   NOTE
 }
 
+enum AutomationStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+}
+
+enum AutomationTrigger {
+  ORDER_PLACED
+  ORDER_STATUS_CHANGED
+  CUSTOMER_CREATED
+  INVENTORY_LOW
+}
+
+enum AutomationActionType {
+  ADD_CUSTOMER_TAG
+  CREATE_CUSTOMER_NOTE
+  SEND_WEBHOOK
+}
+
 model Tenant {
   id String @id @default(cuid())
   name String
@@ -73,6 +92,8 @@ model Tenant {
   customerTags CustomerTag[]
   customerSegments CustomerSegment[]
   customerEvents CustomerEvent[]
+  automations Automation[]
+  automationExecutions AutomationExecution[]
 }
 
 model User {
@@ -201,6 +222,42 @@ model CustomerSegment {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   @@unique([tenantId, name])
   @@index([tenantId, createdAt])
+}
+
+model Automation {
+  id String @id @default(cuid())
+  tenantId String
+  name String
+  description String?
+  status AutomationStatus @default(DRAFT)
+  trigger AutomationTrigger
+  conditions Json
+  actions Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  executions AutomationExecution[]
+  @@unique([tenantId, name])
+  @@index([tenantId, status])
+  @@index([tenantId, trigger, status])
+}
+
+model AutomationExecution {
+  id String @id @default(cuid())
+  tenantId String
+  automationId String
+  triggerEventId String?
+  status String
+  input Json?
+  output Json?
+  error String?
+  startedAt DateTime @default(now())
+  finishedAt DateTime?
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  @@index([tenantId, startedAt])
+  @@index([automationId, startedAt])
+  @@index([triggerEventId])
 }
 
 model Order {
