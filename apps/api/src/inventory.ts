@@ -122,7 +122,7 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
       });
 
       if (result.crossedIntoLowStock) {
-        void triggerInventoryLowAutomation({ tenantId, productId: result.variant.productId, variantId: result.variant.id, stock: result.variant.stock, threshold: LOW_STOCK_THRESHOLD }).catch(() => undefined);
+        void triggerInventoryLowAutomation({ tenantId, productId: result.variant.productId, variantId: result.variant.id, stock: result.variant.stock, threshold: LOW_STOCK_THRESHOLD, referenceId: result.movement.id }).catch(() => undefined);
       }
       return json(res, 200, { ...result, crossedIntoLowStock: undefined, variant: { ...result.variant, price: result.variant.price.toString() } }) as never;
     }
