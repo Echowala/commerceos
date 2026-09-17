@@ -7,16 +7,76 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum UserRole { OWNER ADMIN STAFF }
-enum ProductStatus { DRAFT ACTIVE ARCHIVED }
-enum OrderStatus { PENDING CONFIRMED PROCESSING SHIPPED DELIVERED CANCELLED REFUNDED }
-enum PaymentStatus { PENDING PAID FAILED REFUNDED PARTIALLY_REFUNDED }
-enum PaymentMethod { COD MANUAL_BANK CARD WALLET }
-enum InventoryMovementType { RECEIVE ADJUSTMENT SALE RETURN RESTOCK }
-enum CustomerEventType { ORDER_PLACED ORDER_STATUS_CHANGED CUSTOMER_CREATED NOTE }
-enum AutomationStatus { DRAFT ACTIVE PAUSED }
-enum AutomationTrigger { ORDER_PLACED ORDER_STATUS_CHANGED CUSTOMER_CREATED INVENTORY_LOW }
-enum AutomationActionType { ADD_CUSTOMER_TAG CREATE_CUSTOMER_NOTE SEND_WEBHOOK }
+enum UserRole {
+  OWNER
+  ADMIN
+  STAFF
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentMethod {
+  COD
+  MANUAL_BANK
+  CARD
+  WALLET
+}
+
+enum InventoryMovementType {
+  RECEIVE
+  ADJUSTMENT
+  SALE
+  RETURN
+  RESTOCK
+}
+
+enum CustomerEventType {
+  ORDER_PLACED
+  ORDER_STATUS_CHANGED
+  CUSTOMER_CREATED
+  NOTE
+}
+
+enum AutomationStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+}
+
+enum AutomationTrigger {
+  ORDER_PLACED
+  ORDER_STATUS_CHANGED
+  CUSTOMER_CREATED
+  INVENTORY_LOW
+}
+
+enum AutomationActionType {
+  ADD_CUSTOMER_TAG
+  CREATE_CUSTOMER_NOTE
+  SEND_WEBHOOK
+}
 
 model Tenant {
   id String @id @default(cuid())
