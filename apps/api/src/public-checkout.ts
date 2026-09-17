@@ -22,7 +22,12 @@ const checkoutFingerprint = (input: CheckoutInput) => createHash("sha256").updat
   items: [...input.items].map(item => ({ variantId: String(item.variantId ?? ""), quantity: Number(item.quantity) })).sort((a, b) => a.variantId.localeCompare(b.variantId) || a.quantity - b.quantity),
 })).digest("hex");
 
-export async function createPublicOrder(input: CheckoutInput, tenantSlug: string, storeSlug: string, idempotencyKey: string | null = null) {
+type PublicOrderResult = {
+  order: Awaited<ReturnType<typeof prisma.order.findFirst>> & NonNullable<Awaited<ReturnType<typeof prisma.order.findFirst>>>;
+  replayed: boolean;
+};
+
+export async function createPublicOrder(input: CheckoutInput, tenantSlug: string, storeSlug: string, idempotencyKey: string | null = null): Promise<PublicOrderResult> {
   if (!Array.isArray(input.items) || input.items.length === 0 || input.items.length > 100) throw new Error("ITEMS_REQUIRED");
   const email = input.customer?.email ? String(input.customer.email).trim().toLowerCase() : null;
   const shippingName = String(input.shippingName ?? input.customer?.name ?? "").trim();
@@ -38,12 +43,12 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
     const existing = await prisma.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
     if (existing) {
       if (existing.idempotencyFingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_REUSED");
-      return existing;
+      return { order: existing, replayed: true };
     }
   }
 
   try {
-    return await prisma.$transaction(async tx => {
+    const order = await prisma.$transaction(async tx => {
       if (idempotencyKey) {
         const existing = await tx.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
         if (existing) {
@@ -90,12 +95,13 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
       ] });
       return order;
     });
+    return { order, replayed: false };
   } catch (error) {
     if (idempotencyKey && error instanceof Error && error.message.includes("Order_storeId_idempotencyKey_key")) {
       const existing = await prisma.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
       if (existing) {
         if (existing.idempotencyFingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_REUSED");
-        return existing;
+        return { order: existing, replayed: true };
       }
     }
     throw error;
