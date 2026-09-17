@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { prisma } from "@commerceos/database";
+import { triggerCustomerCreatedAutomation, triggerOrderPlacedAutomation } from "./automation-hooks.js";
 
 const orderNumber = () => `CO-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString("hex").toUpperCase()}`;
 
@@ -48,17 +49,15 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
   }
 
   try {
-    const order = await prisma.$transaction(async tx => {
+    const result = await prisma.$transaction(async tx => {
       if (idempotencyKey) {
         const existing = await tx.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
         if (existing) {
           if (existing.idempotencyFingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_REUSED");
-          return existing;
+          return { order: existing, customerCreated: false };
         }
       }
 
-      // Serialize customer lookup/create for the same tenant+email. The transaction-scoped
-      // PostgreSQL advisory lock closes the race where two first-time checkouts arrive together.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${store.tenantId}:${email}`}, 0))`;
       let customer = await tx.customer.findFirst({ where: { tenantId: store.tenantId, email } });
       const customerCreated = !customer;
@@ -93,9 +92,14 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
         ...(customerCreated ? [{ tenantId: store.tenantId, customerId: customer.id, type: "CUSTOMER_CREATED" as const, data: { source: "public_checkout" } }] : []),
         { tenantId: store.tenantId, customerId: customer.id, type: "ORDER_PLACED" as const, data: { orderId: order.id, orderNumber: order.orderNumber, total: order.total.toString(), currency: order.currency } },
       ] });
-      return order;
+      return { order, customerCreated };
     });
-    return { order, replayed: false };
+
+    if (result.customerCreated) {
+      void triggerCustomerCreatedAutomation({ tenantId: store.tenantId, customerId: result.order.customerId!, email }).catch(() => undefined);
+    }
+    void triggerOrderPlacedAutomation({ tenantId: store.tenantId, customerId: result.order.customerId!, orderId: result.order.id, orderNumber: result.order.orderNumber, total: result.order.total.toString(), currency: result.order.currency }).catch(() => undefined);
+    return { order: result.order, replayed: false };
   } catch (error) {
     if (idempotencyKey && error instanceof Error && error.message.includes("Order_storeId_idempotencyKey_key")) {
       const existing = await prisma.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
