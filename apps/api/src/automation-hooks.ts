@@ -4,6 +4,7 @@ export const triggerOrderPlacedAutomation = async (event: { tenantId: string; cu
   await triggerAutomations({
     tenantId: event.tenantId,
     trigger: "ORDER_PLACED",
+    eventId: `order:${event.orderId}:placed`,
     customerId: event.customerId,
     data: { orderId: event.orderId, orderNumber: event.orderNumber, total: Number(event.total), currency: event.currency },
   });
@@ -13,6 +14,7 @@ export const triggerCustomerCreatedAutomation = async (event: { tenantId: string
   await triggerAutomations({
     tenantId: event.tenantId,
     trigger: "CUSTOMER_CREATED",
+    eventId: `customer:${event.customerId}:created`,
     customerId: event.customerId,
     data: { customerId: event.customerId, email: event.email },
   });
@@ -22,6 +24,7 @@ export const triggerOrderStatusChangedAutomation = async (event: { tenantId: str
   await triggerAutomations({
     tenantId: event.tenantId,
     trigger: "ORDER_STATUS_CHANGED",
+    eventId: `order:${event.orderId}:status:${event.from}:${event.to}`,
     customerId: event.customerId,
     data: { orderId: event.orderId, orderNumber: event.orderNumber, from: event.from, to: event.to },
   });
@@ -31,6 +34,7 @@ export const triggerInventoryLowAutomation = async (event: { tenantId: string; p
   await triggerAutomations({
     tenantId: event.tenantId,
     trigger: "INVENTORY_LOW",
+    eventId: `inventory:${event.variantId}:low:${event.threshold}`,
     data: { productId: event.productId, variantId: event.variantId, stock: event.stock, threshold: event.threshold },
   });
 };
