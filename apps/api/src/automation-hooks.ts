@@ -17,3 +17,20 @@ export const triggerCustomerCreatedAutomation = async (event: { tenantId: string
     data: { customerId: event.customerId, email: event.email },
   });
 };
+
+export const triggerOrderStatusChangedAutomation = async (event: { tenantId: string; customerId: string | null; orderId: string; orderNumber: string; from: string; to: string }) => {
+  await triggerAutomations({
+    tenantId: event.tenantId,
+    trigger: "ORDER_STATUS_CHANGED",
+    customerId: event.customerId,
+    data: { orderId: event.orderId, orderNumber: event.orderNumber, from: event.from, to: event.to },
+  });
+};
+
+export const triggerInventoryLowAutomation = async (event: { tenantId: string; productId: string; variantId: string; stock: number; threshold: number }) => {
+  await triggerAutomations({
+    tenantId: event.tenantId,
+    trigger: "INVENTORY_LOW",
+    data: { productId: event.productId, variantId: event.variantId, stock: event.stock, threshold: event.threshold },
+  });
+};
