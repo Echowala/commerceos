@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { prisma } from "@commerceos/database";
-import { triggerCustomerCreatedAutomation, triggerOrderPlacedAutomation } from "./automation-hooks.js";
+import { triggerCustomerCreatedAutomation, triggerInventoryLowAutomation, triggerOrderPlacedAutomation } from "./automation-hooks.js";
 
 const orderNumber = () => `CO-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString("hex").toUpperCase()}`;
 
@@ -54,7 +54,7 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
         const existing = await tx.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
         if (existing) {
           if (existing.idempotencyFingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_REUSED");
-          return { order: existing, customerCreated: false, replayed: true };
+          return { order: existing, customerCreated: false, replayed: true, lowStockItems: [] };
         }
       }
 
@@ -71,7 +71,7 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
       }
 
       const orderItems: { productId: string; variantId: string; name: string; quantity: number; unitPrice: number; total: number }[] = [];
-      const movements: { productId: string; variantId: string; quantity: number; stockBefore: number; stockAfter: number }[] = [];
+      const movements: { productId: string; variantId: string; quantity: number; stockBefore: number; stockAfter: number; crossedIntoLowStock: boolean }[] = [];
       let subtotal = 0;
       for (const raw of input.items) {
         const quantity = Number(raw.quantity);
@@ -83,7 +83,7 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
         const stockAfter = variant.stock - quantity;
         const unitPrice = Number(variant.price); const total = unitPrice * quantity;
         orderItems.push({ productId: variant.productId, variantId: variant.id, name: variant.product.name, quantity, unitPrice, total });
-        movements.push({ productId: variant.productId, variantId: variant.id, quantity: -quantity, stockBefore: variant.stock, stockAfter });
+        movements.push({ productId: variant.productId, variantId: variant.id, quantity: -quantity, stockBefore: variant.stock, stockAfter, crossedIntoLowStock: variant.stock > 5 && stockAfter > 0 && stockAfter <= 5 });
         subtotal += total;
       }
       const order = await tx.order.create({ data: { tenantId: store.tenantId, storeId: store.id, customerId: customer.id, orderNumber: orderNumber(), idempotencyKey, idempotencyFingerprint: fingerprint, status: "CONFIRMED", paymentStatus: "PENDING", paymentMethod: "COD", subtotal, total: subtotal, currency: store.currency, shippingName, shippingPhone, shippingAddress, items: { create: orderItems } } });
@@ -92,7 +92,7 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
         ...(customerCreated ? [{ tenantId: store.tenantId, customerId: customer.id, type: "CUSTOMER_CREATED" as const, data: { source: "public_checkout" } }] : []),
         { tenantId: store.tenantId, customerId: customer.id, type: "ORDER_PLACED" as const, data: { orderId: order.id, orderNumber: order.orderNumber, total: order.total.toString(), currency: order.currency } },
       ] });
-      return { order, customerCreated, replayed: false };
+      return { order, customerCreated, replayed: false, lowStockItems: movements.filter(movement => movement.crossedIntoLowStock) };
     });
 
     if (!result.replayed) {
@@ -100,6 +100,9 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
         void triggerCustomerCreatedAutomation({ tenantId: store.tenantId, customerId: result.order.customerId!, email }).catch(() => undefined);
       }
       void triggerOrderPlacedAutomation({ tenantId: store.tenantId, customerId: result.order.customerId!, orderId: result.order.id, orderNumber: result.order.orderNumber, total: result.order.total.toString(), currency: result.order.currency }).catch(() => undefined);
+      for (const item of result.lowStockItems) {
+        void triggerInventoryLowAutomation({ tenantId: store.tenantId, productId: item.productId, variantId: item.variantId, stock: item.stockAfter, threshold: 5, referenceId: result.order.id }).catch(() => undefined);
+      }
     }
     return { order: result.order, replayed: result.replayed };
   } catch (error) {
