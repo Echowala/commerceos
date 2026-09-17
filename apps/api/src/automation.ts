@@ -18,8 +18,11 @@ const readBody = async (req: IncomingMessage): Promise<Record<string, unknown>> 
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 };
 
-const triggers = new Set(["ORDER_PLACED", "ORDER_STATUS_CHANGED", "CUSTOMER_CREATED", "INVENTORY_LOW"]);
-const statuses = new Set(["DRAFT", "ACTIVE", "PAUSED"]);
+type AutomationTrigger = "ORDER_PLACED" | "ORDER_STATUS_CHANGED" | "CUSTOMER_CREATED" | "INVENTORY_LOW";
+type AutomationStatus = "DRAFT" | "ACTIVE" | "PAUSED";
+
+const triggers = new Set<AutomationTrigger>(["ORDER_PLACED", "ORDER_STATUS_CHANGED", "CUSTOMER_CREATED", "INVENTORY_LOW"]);
+const statuses = new Set<AutomationStatus>(["DRAFT", "ACTIVE", "PAUSED"]);
 const actionTypes = new Set(["ADD_CUSTOMER_TAG", "CREATE_CUSTOMER_NOTE", "SEND_WEBHOOK"]);
 
 const validConfig = (value: unknown): value is Record<string, unknown>[] => {
@@ -50,8 +53,8 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
       const input = await readBody(req);
       const name = String(input.name ?? "").trim();
       const description = input.description == null ? null : String(input.description).trim() || null;
-      const trigger = String(input.trigger ?? "");
-      const status = input.status == null ? "DRAFT" : String(input.status);
+      const trigger = String(input.trigger ?? "") as AutomationTrigger;
+      const status = input.status == null ? "DRAFT" : String(input.status) as AutomationStatus;
       if (!name || name.length > 120) return respond(res, 400, { error: "automation_name_required" });
       if (!triggers.has(trigger)) return respond(res, 400, { error: "invalid_automation_trigger" });
       if (!statuses.has(status)) return respond(res, 400, { error: "invalid_automation_status" });
@@ -59,7 +62,7 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
       if (!validConfig(input.actions)) return respond(res, 400, { error: "invalid_automation_actions" });
       const existing = await prisma.automation.findFirst({ where: { tenantId, name }, select: { id: true } });
       if (existing) return respond(res, 409, { error: "automation_already_exists" });
-      const automation = await prisma.automation.create({ data: { tenantId, name, description, trigger: trigger as Prisma.AutomationTrigger, status: status as Prisma.AutomationStatus, conditions: (input.conditions ?? {}) as Prisma.InputJsonValue, actions: input.actions as Prisma.InputJsonValue } });
+      const automation = await prisma.automation.create({ data: { tenantId, name, description, trigger, status, conditions: (input.conditions ?? {}) as Prisma.InputJsonValue, actions: input.actions as Prisma.InputJsonValue } });
       return respond(res, 201, automation);
     }
 
@@ -71,8 +74,8 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
       const data: Prisma.AutomationUpdateInput = {};
       if (input.name !== undefined) { const name = String(input.name).trim(); if (!name || name.length > 120) return respond(res, 400, { error: "automation_name_required" }); data.name = name; }
       if (input.description !== undefined) data.description = input.description == null ? null : String(input.description).trim() || null;
-      if (input.status !== undefined) { const status = String(input.status); if (!statuses.has(status)) return respond(res, 400, { error: "invalid_automation_status" }); data.status = status as Prisma.AutomationStatus; }
-      if (input.trigger !== undefined) { const trigger = String(input.trigger); if (!triggers.has(trigger)) return respond(res, 400, { error: "invalid_automation_trigger" }); data.trigger = trigger as Prisma.AutomationTrigger; }
+      if (input.status !== undefined) { const status = String(input.status) as AutomationStatus; if (!statuses.has(status)) return respond(res, 400, { error: "invalid_automation_status" }); data.status = status; }
+      if (input.trigger !== undefined) { const trigger = String(input.trigger) as AutomationTrigger; if (!triggers.has(trigger)) return respond(res, 400, { error: "invalid_automation_trigger" }); data.trigger = trigger; }
       if (input.conditions !== undefined) { if (!validConditions(input.conditions)) return respond(res, 400, { error: "invalid_automation_conditions" }); data.conditions = input.conditions as Prisma.InputJsonValue; }
       if (input.actions !== undefined) { if (!validConfig(input.actions)) return respond(res, 400, { error: "invalid_automation_actions" }); data.actions = input.actions as Prisma.InputJsonValue; }
       if (!Object.keys(data).length) return respond(res, 400, { error: "no_automation_fields" });
