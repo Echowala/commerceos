@@ -6,6 +6,7 @@ import { signup } from "./signup.js";
 import { createPublicOrder } from "./public-checkout.js";
 import { recordInventoryMovement } from "./inventory.js";
 import { getRequestContext, requireTenant } from "./tenant.js";
+import { triggerInventoryLowAutomation, triggerOrderPlacedAutomation } from "./automation-hooks.js";
 
 const json = (res: ServerResponse, status: number, body: unknown) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.end(JSON.stringify(body)); };
 const body = async (req: IncomingMessage) => { let raw = ""; for await (const chunk of req) raw += chunk; if (raw.length > 1_000_000) throw new Error("PAYLOAD_TOO_LARGE"); return raw ? JSON.parse(raw) : {}; };
@@ -100,9 +101,11 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
         const customer = await prisma.customer.findFirst({ where: { id: customerId, tenantId }, select: { id: true } });
         if (!customer) return json(res, 404, { error: "customer_not_found" });
       }
+      const requestedStatus = orderStatuses.includes(input.status) ? input.status : "PENDING";
       const created = await prisma.$transaction(async tx => {
-        const order = await tx.order.create({ data: { tenantId, storeId: store.id, orderNumber: orderNumber(), status: orderStatuses.includes(input.status) ? input.status : "PENDING", paymentStatus: input.paymentStatus ?? "PENDING", paymentMethod: input.paymentMethod ?? "COD", subtotal: 0, total: 0, currency: store.currency, shippingName: String(input.shippingName ?? "").trim(), shippingPhone: String(input.shippingPhone ?? "").trim(), shippingAddress: String(input.shippingAddress ?? "").trim(), customerId } });
+        const order = await tx.order.create({ data: { tenantId, storeId: store.id, orderNumber: orderNumber(), status: requestedStatus, paymentStatus: input.paymentStatus ?? "PENDING", paymentMethod: input.paymentMethod ?? "COD", subtotal: 0, total: 0, currency: store.currency, shippingName: String(input.shippingName ?? "").trim(), shippingPhone: String(input.shippingPhone ?? "").trim(), shippingAddress: String(input.shippingAddress ?? "").trim(), customerId } });
         let subtotal = 0;
+        const lowStockCrossings: Array<{ productId: string; variantId: string; stock: number; threshold: number; referenceId: string }> = [];
         for (const item of input.items) {
           const quantity = Number(item?.quantity);
           if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("INVALID_QUANTITY");
@@ -111,11 +114,21 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
           const unitPrice = Number(variant.price);
           const total = unitPrice * quantity;
           subtotal += total;
+          if (!stockReleasingStatuses.has(requestedStatus)) {
+            const nextStock = variant.stock - quantity;
+            if (nextStock < 0) throw new Error("INSUFFICIENT_STOCK");
+            const updatedCount = await tx.productVariant.updateMany({ where: { id: variant.id, stock: variant.stock }, data: { stock: { decrement: quantity } } });
+            if (updatedCount.count !== 1) throw new Error("INVENTORY_CONFLICT");
+            const movement = await recordInventoryMovement(tx, { tenantId, productId: variant.productId, variantId: variant.id, type: "SALE", quantity: -quantity, stockBefore: variant.stock, stockAfter: nextStock, reason: "Admin order", referenceId: order.id, createdByUserId: context.auth!.userId });
+            if (variant.stock > 5 && nextStock > 0 && nextStock <= 5) lowStockCrossings.push({ productId: variant.productId, variantId: variant.id, stock: nextStock, threshold: 5, referenceId: movement.id });
+          }
           await tx.orderItem.create({ data: { orderId: order.id, productId: variant.productId, variantId: variant.id, name: variant.product.name, quantity, unitPrice, total } });
         }
-        return tx.order.update({ where: { id: order.id }, data: { subtotal, total: subtotal }, include: { items: true } });
+        return tx.order.update({ where: { id: order.id }, data: { subtotal, total: subtotal }, include: { items: true } }).then(updated => ({ order: updated, lowStockCrossings }));
       });
-      return json(res, 201, created);
+      if (customerId) void triggerOrderPlacedAutomation({ tenantId, customerId, orderId: created.order.id, orderNumber: created.order.orderNumber, total: created.order.total.toString(), currency: created.order.currency }).catch(() => undefined);
+      for (const crossing of created.lowStockCrossings) void triggerInventoryLowAutomation({ tenantId, ...crossing }).catch(() => undefined);
+      return json(res, 201, created.order);
     }
     return json(res, 404, { error: "not_found" });
   } catch (error) {
