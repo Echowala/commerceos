@@ -1,3 +1,5 @@
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { prisma } from "@commerceos/database";
 import type { Prisma } from "@prisma/client";
 
@@ -13,6 +15,36 @@ type Condition = { field?: unknown; operator?: unknown; value?: unknown };
 type Action = { type: string; tagId?: string; note?: string; url?: string };
 
 const WEBHOOK_TIMEOUT_MS = 10_000;
+const WEBHOOK_MAX_REDIRECTS = 3;
+
+const isPrivateIpv4 = (ip: string): boolean => {
+  const octets = ip.split(".").map(Number);
+  if (octets.length !== 4 || octets.some(value => !Number.isInteger(value) || value < 0 || value > 255)) return true;
+  const [a, b] = octets;
+  return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19)) || a >= 224;
+};
+
+const isPrivateIpv6 = (ip: string): boolean => {
+  const normalized = ip.toLowerCase();
+  return normalized === "::" || normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || /^fe[89ab]/.test(normalized) || normalized.startsWith("ff");
+};
+
+const validateWebhookUrl = async (rawUrl: string): Promise<URL> => {
+  let url: URL;
+  try { url = new URL(rawUrl); } catch { throw new Error("AUTOMATION_WEBHOOK_URL_INVALID"); }
+  if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) throw new Error("AUTOMATION_WEBHOOK_URL_INVALID");
+  const host = url.hostname.replace(/^\\[|\\]$/g, "").toLowerCase();
+  if (!host) throw new Error("AUTOMATION_WEBHOOK_URL_INVALID");
+  const ipVersion = isIP(host);
+  if (ipVersion) {
+    if ((ipVersion === 4 && isPrivateIpv4(host)) || (ipVersion === 6 && isPrivateIpv6(host))) throw new Error("AUTOMATION_WEBHOOK_URL_BLOCKED");
+    return url;
+  }
+  let addresses: Array<{ address: string }>;
+  try { addresses = await lookup(host, { all: true, verbatim: true }); } catch { throw new Error("AUTOMATION_WEBHOOK_HOST_UNRESOLVED"); }
+  if (!addresses.length || addresses.some(({ address }) => (isIP(address) === 4 && isPrivateIpv4(address)) || (isIP(address) === 6 && isPrivateIpv6(address)))) throw new Error("AUTOMATION_WEBHOOK_URL_BLOCKED");
+  return url;
+};
 const asRecord = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const getPath = (data: Record<string, unknown>, path: string): unknown => path.split(".").reduce<unknown>((value, key) => asRecord(value)[key], data);
 
@@ -59,17 +91,28 @@ const executeDatabaseAction = async (tx: Prisma.TransactionClient, tenantId: str
 };
 
 const sendWebhook = async (tenantId: string, trigger: AutomationEvent["trigger"], eventId: string | undefined, action: Action, event: AutomationEvent) => {
-  if (!action.url || !/^https:\/\//i.test(action.url)) throw new Error("AUTOMATION_WEBHOOK_URL_INVALID");
+  if (!action.url) throw new Error("AUTOMATION_WEBHOOK_URL_INVALID");
+  let url = await validateWebhookUrl(action.url);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
   try {
-    const response = await fetch(action.url, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-commerceos-event": trigger, ...(eventId ? { "x-commerceos-event-id": eventId } : {}) },
-      body: JSON.stringify({ trigger, eventId: eventId ?? null, tenantId, customerId: event.customerId ?? null, data: event.data }),
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`AUTOMATION_WEBHOOK_HTTP_${response.status}`);
+    for (let redirectCount = 0; redirectCount <= WEBHOOK_MAX_REDIRECTS; redirectCount += 1) {
+      const response = await fetch(url, {
+        method: "POST",
+        redirect: "manual",
+        headers: { "content-type": "application/json", "x-commerceos-event": trigger, ...(eventId ? { "x-commerceos-event-id": eventId } : {}) },
+        body: JSON.stringify({ trigger, eventId: eventId ?? null, tenantId, customerId: event.customerId ?? null, data: event.data }),
+        signal: controller.signal,
+      });
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get("location");
+        if (!location || redirectCount === WEBHOOK_MAX_REDIRECTS) throw new Error("AUTOMATION_WEBHOOK_REDIRECT_INVALID");
+        url = await validateWebhookUrl(new URL(location, url).toString());
+        continue;
+      }
+      if (!response.ok) throw new Error(`AUTOMATION_WEBHOOK_HTTP_${response.status}`);
+      return;
+    }
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") throw new Error("AUTOMATION_WEBHOOK_TIMEOUT");
     throw error;
