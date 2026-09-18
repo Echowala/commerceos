@@ -138,6 +138,9 @@ export const triggerAutomations = async (event: AutomationEvent): Promise<void> 
           data: { status: "FAILED", finishedAt: new Date(), error: message },
         });
       }
+    } catch {
+      // Keep one failing automation from preventing other active automations
+      // for the same event from being evaluated.
     }
   }
 };
