@@ -1,5 +1,5 @@
 import { prisma } from "@commerceos/database";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 export type AutomationEvent = {
   tenantId: string;
