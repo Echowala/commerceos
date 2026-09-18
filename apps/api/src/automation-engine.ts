@@ -1,5 +1,5 @@
 import { prisma } from "@commerceos/database";
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 
 export type AutomationEvent = {
   tenantId: string;
@@ -112,7 +112,7 @@ export const triggerAutomations = async (event: AutomationEvent): Promise<void> 
         // The unique (automationId, triggerEventId) constraint is the authoritative
         // idempotency guard. Under a race, one invocation owns the execution and the
         // other must leave it untouched rather than marking it failed.
-        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002" && event.eventId) continue;
+        if (event.eventId && typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "P2002") continue;
         throw error;
       }
 
