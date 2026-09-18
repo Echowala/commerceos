@@ -16,6 +16,7 @@ type Action = { type: string; tagId?: string; note?: string; url?: string };
 
 const WEBHOOK_TIMEOUT_MS = 10_000;
 const WEBHOOK_MAX_REDIRECTS = 3;
+const AUTOMATION_EXECUTION_STALE_MS = 15 * 60 * 1000;
 
 const isPrivateIpv4 = (ip: string): boolean => {
   const octets = ip.split(".").map(Number);
@@ -138,7 +139,33 @@ export const triggerAutomations = async (event: AutomationEvent): Promise<void> 
 
       let executionId: string;
       try {
-        const execution = await prisma.automationExecution.create({
+        const existing = event.eventId
+          ? await prisma.automationExecution.findFirst({
+              where: { automationId: automation.id, triggerEventId: event.eventId },
+              select: { id: true, status: true, startedAt: true },
+            })
+          : null;
+
+        if (existing) {
+          if (existing.status === "SUCCEEDED" || existing.status === "RUNNING") {
+            if (existing.status === "RUNNING" && existing.startedAt.getTime() < Date.now() - AUTOMATION_EXECUTION_STALE_MS) {
+              await prisma.automationExecution.updateMany({
+                where: { id: existing.id, status: "RUNNING", startedAt: existing.startedAt },
+                data: { status: "FAILED", finishedAt: new Date(), error: "AUTOMATION_EXECUTION_STALE" },
+              });
+            } else {
+              continue;
+            }
+          }
+
+          const claimed = await prisma.automationExecution.updateMany({
+            where: { id: existing.id, status: "FAILED" },
+            data: { status: "RUNNING", startedAt, finishedAt: null, error: null },
+          });
+          if (claimed.count !== 1) continue;
+          executionId = existing.id;
+        } else {
+          const execution = await prisma.automationExecution.create({
           data: {
             tenantId: event.tenantId,
             automationId: automation.id,
@@ -150,13 +177,27 @@ export const triggerAutomations = async (event: AutomationEvent): Promise<void> 
           },
           select: { id: true },
         });
-        executionId = execution.id;
+          executionId = execution.id;
+        }
       } catch (error) {
         // The unique (automationId, triggerEventId) constraint is the authoritative
         // idempotency guard. Under a race, one invocation owns the execution and the
         // other must leave it untouched rather than marking it failed.
-        if (event.eventId && typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "P2002") continue;
-        throw error;
+        if (event.eventId && typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "P2002") {
+          const raced = await prisma.automationExecution.findFirst({
+            where: { automationId: automation.id, triggerEventId: event.eventId },
+            select: { id: true, status: true, startedAt: true },
+          });
+          if (!raced || raced.status === "SUCCEEDED" || raced.status === "RUNNING") continue;
+          const claimed = await prisma.automationExecution.updateMany({
+            where: { id: raced.id, status: "FAILED" },
+            data: { status: "RUNNING", startedAt, finishedAt: null, error: null },
+          });
+          if (claimed.count !== 1) continue;
+          executionId = raced.id;
+        } else {
+          throw error;
+        }
       }
 
       try {
