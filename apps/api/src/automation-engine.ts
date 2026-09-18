@@ -74,7 +74,7 @@ const matchesConditions = (data: Record<string, unknown>, conditions: unknown): 
   return true;
 };
 
-const executeDatabaseAction = async (tx: Prisma.TransactionClient, tenantId: string, customerId: string | null | undefined, action: Action) => {
+const executeDatabaseAction = async (tx: Prisma.TransactionClient, tenantId: string, customerId: string | null | undefined, action: Action, idempotencyKey: string) => {
   if (action.type === "ADD_CUSTOMER_TAG") {
     if (!customerId || !action.tagId) return;
     const tag = await tx.customerTag.findFirst({ where: { id: action.tagId, tenantId }, select: { id: true } });
@@ -84,7 +84,10 @@ const executeDatabaseAction = async (tx: Prisma.TransactionClient, tenantId: str
   }
   if (action.type === "CREATE_CUSTOMER_NOTE") {
     if (!customerId || !action.note) return;
-    await tx.customerEvent.create({ data: { tenantId, customerId, type: "NOTE", data: { note: action.note, source: "automation" } } });
+    await tx.customerEvent.createMany({
+      data: [{ id: idempotencyKey, tenantId, customerId, type: "NOTE", data: { note: action.note, source: "automation" } }],
+      skipDuplicates: true,
+    });
     return;
   }
   if (action.type === "SEND_WEBHOOK") return;
@@ -202,7 +205,9 @@ export const triggerAutomations = async (event: AutomationEvent): Promise<void> 
 
       try {
         await prisma.$transaction(async tx => {
-          for (const action of databaseActions) await executeDatabaseAction(tx, event.tenantId, event.customerId, action);
+          for (const [index, action] of databaseActions.entries()) {
+            await executeDatabaseAction(tx, event.tenantId, event.customerId, action, `automation:${executionId}:db:${index}`);
+          }
         });
 
         for (const action of webhookActions) await sendWebhook(event.tenantId, event.trigger, event.eventId, action, event);
