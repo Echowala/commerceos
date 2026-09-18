@@ -23,17 +23,55 @@ export const handleOrderStatusRequest = async (req: IncomingMessage, res: Server
       const currentStatus = order.status as OrderStatus; if (!allowedTransitions[currentStatus].includes(status)) throw new Error(`INVALID_ORDER_TRANSITION:${currentStatus}:${status}`);
       const shouldReleaseStock = stockReleasingStatuses.has(status) && !stockReleasingStatuses.has(currentStatus);
       if (shouldReleaseStock) {
-        const claimed = await tx.order.updateMany({ where: { id: order.id, tenantId, status: currentStatus, inventoryReleasedAt: null }, data: { inventoryReleasedAt: new Date() } });
+        const claimed = await tx.order.updateMany({
+          where: { id: order.id, tenantId, status: currentStatus, inventoryReleasedAt: null },
+          data: { inventoryReleasedAt: new Date() },
+        });
         if (claimed.count !== 1) throw new Error("ORDER_STATE_CONFLICT");
+
+        // Release only inventory that was actually sold for this order. This prevents
+        // cancelled/refunded orders created without inventory deduction from creating
+        // phantom stock, while keeping the release idempotent via inventoryReleasedAt.
+        const saleMovements = await tx.inventoryMovement.findMany({
+          where: { tenantId, referenceId: order.id, type: "SALE" },
+          select: { productId: true, variantId: true, quantity: true },
+        });
         const quantities = new Map<string, { productId: string; quantity: number }>();
-        for (const item of order.items) { const existing = quantities.get(item.variantId); if (existing) existing.quantity += item.quantity; else quantities.set(item.variantId, { productId: item.productId, quantity: item.quantity }); }
+        for (const movement of saleMovements) {
+          const releasedQuantity = Math.max(0, -movement.quantity);
+          if (releasedQuantity === 0) continue;
+          const existing = quantities.get(movement.variantId);
+          if (existing) existing.quantity += releasedQuantity;
+          else quantities.set(movement.variantId, { productId: movement.productId, quantity: releasedQuantity });
+        }
+
         for (const [variantId, release] of quantities) {
-          const variant = await tx.productVariant.findFirst({ where: { id: variantId, product: { store: { tenantId } } }, select: { id: true, productId: true, stock: true } });
+          const variant = await tx.productVariant.findFirst({
+            where: { id: variantId, product: { store: { tenantId } } },
+            select: { id: true, productId: true, stock: true },
+          });
           if (!variant) throw new Error("ORDER_ITEM_NOT_FOUND");
-          const stockBefore = variant.stock; const stockAfter = stockBefore + release.quantity;
-          const guarded = await tx.productVariant.updateMany({ where: { id: variant.id, stock: stockBefore }, data: { stock: { increment: release.quantity } } });
+
+          const stockBefore = variant.stock;
+          const stockAfter = stockBefore + release.quantity;
+          const guarded = await tx.productVariant.updateMany({
+            where: { id: variant.id, stock: stockBefore },
+            data: { stock: { increment: release.quantity } },
+          });
           if (guarded.count !== 1) throw new Error("INVENTORY_CONFLICT");
-          await recordInventoryMovement(tx, { tenantId, productId: variant.productId, variantId: variant.id, type: "RETURN", quantity: release.quantity, stockBefore, stockAfter, referenceId: order.id, reason: `${status} order ${order.orderNumber}`, createdByUserId: context.auth?.userId ?? null });
+
+          await recordInventoryMovement(tx, {
+            tenantId,
+            productId: variant.productId,
+            variantId: variant.id,
+            type: "RETURN",
+            quantity: release.quantity,
+            stockBefore,
+            stockAfter,
+            referenceId: order.id,
+            reason: `${status} order ${order.orderNumber}`,
+            createdByUserId: context.auth?.userId ?? null,
+          });
         }
       }
       const updated = await tx.order.updateMany({ where: { id: order.id, tenantId, status: currentStatus }, data: { status } }); if (updated.count !== 1) throw new Error("ORDER_STATE_CONFLICT");
