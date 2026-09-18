@@ -91,7 +91,31 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     const orderMatch = url.pathname.match(/^\/orders\/([^/]+)$/);
     if (orderMatch && req.method === "GET") { const order = await prisma.order.findFirst({ where: { id: orderMatch[1], tenantId }, include: { customer: true, store: true, items: true } }); return order ? json(res, 200, order) : json(res, 404, { error: "order_not_found" }); }
     if (url.pathname === "/orders" && req.method === "POST") {
-      const input = await body(req); if (!input.storeId || !input.items?.length) return json(res, 400, { error: "storeId and items are required" }); const store = await prisma.store.findFirst({ where: { id: input.storeId, tenantId } }); if (!store) return json(res, 404, { error: "store_not_found" }); const created = await prisma.$transaction(async tx => { const order = await tx.order.create({ data: { tenantId, storeId: store.id, orderNumber: orderNumber(), status: orderStatuses.includes(input.status) ? input.status : "PENDING", paymentStatus: input.paymentStatus ?? "PENDING", paymentMethod: input.paymentMethod ?? "COD", subtotal: Number(input.subtotal ?? 0), total: Number(input.total ?? input.subtotal ?? 0), currency: input.currency ?? store.currency, shippingName: input.shippingName ?? "", shippingPhone: input.shippingPhone ?? "", shippingAddress: input.shippingAddress ?? "", customerId: input.customerId } }); for (const item of input.items) await tx.orderItem.create({ data: { orderId: order.id, productId: item.productId, variantId: item.variantId, name: item.name, quantity: Number(item.quantity), unitPrice: Number(item.unitPrice), total: Number(item.total) } }); return tx.order.findUniqueOrThrow({ where: { id: order.id }, include: { items: true } }); }); return json(res, 201, created);
+      const input = await body(req);
+      if (!input.storeId || !Array.isArray(input.items) || input.items.length === 0 || input.items.length > 100) return json(res, 400, { error: "storeId and 1-100 items are required" });
+      const store = await prisma.store.findFirst({ where: { id: input.storeId, tenantId } });
+      if (!store) return json(res, 404, { error: "store_not_found" });
+      const customerId = input.customerId == null ? null : String(input.customerId);
+      if (customerId) {
+        const customer = await prisma.customer.findFirst({ where: { id: customerId, tenantId }, select: { id: true } });
+        if (!customer) return json(res, 404, { error: "customer_not_found" });
+      }
+      const created = await prisma.$transaction(async tx => {
+        const order = await tx.order.create({ data: { tenantId, storeId: store.id, orderNumber: orderNumber(), status: orderStatuses.includes(input.status) ? input.status : "PENDING", paymentStatus: input.paymentStatus ?? "PENDING", paymentMethod: input.paymentMethod ?? "COD", subtotal: 0, total: 0, currency: store.currency, shippingName: String(input.shippingName ?? "").trim(), shippingPhone: String(input.shippingPhone ?? "").trim(), shippingAddress: String(input.shippingAddress ?? "").trim(), customerId } });
+        let subtotal = 0;
+        for (const item of input.items) {
+          const quantity = Number(item?.quantity);
+          if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("INVALID_QUANTITY");
+          const variant = await tx.productVariant.findFirst({ where: { id: String(item?.variantId ?? ""), product: { storeId: store.id, status: "ACTIVE" } }, include: { product: { select: { name: true } } } });
+          if (!variant) throw new Error("ITEM_NOT_FOUND");
+          const unitPrice = Number(variant.price);
+          const total = unitPrice * quantity;
+          subtotal += total;
+          await tx.orderItem.create({ data: { orderId: order.id, productId: variant.productId, variantId: variant.id, name: variant.product.name, quantity, unitPrice, total } });
+        }
+        return tx.order.update({ where: { id: order.id }, data: { subtotal, total: subtotal }, include: { items: true } });
+      });
+      return json(res, 201, created);
     }
     return json(res, 404, { error: "not_found" });
   } catch (error) {
