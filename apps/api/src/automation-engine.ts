@@ -93,17 +93,51 @@ export const triggerAutomations = async (event: AutomationEvent): Promise<void> 
       const webhookActions = actions.filter(action => action.type === "SEND_WEBHOOK");
       if (webhookActions.some(action => !action.url || !/^https:\/\//i.test(action.url))) throw new Error("AUTOMATION_WEBHOOK_URL_INVALID");
 
-      await prisma.$transaction(async tx => {
-        for (const action of databaseActions) await executeDatabaseAction(tx, event.tenantId, event.customerId, action);
-        await tx.automationExecution.create({ data: { tenantId: event.tenantId, automationId: automation.id, triggerEventId: event.eventId, status: "RUNNING", startedAt, input: { ...event.data, eventId: event.eventId ?? null } as Prisma.InputJsonValue, output: { databaseActionCount: databaseActions.length, webhookActionCount: webhookActions.length } } });
-      });
+      let executionId: string;
+      try {
+        const execution = await prisma.automationExecution.create({
+          data: {
+            tenantId: event.tenantId,
+            automationId: automation.id,
+            triggerEventId: event.eventId,
+            status: "RUNNING",
+            startedAt,
+            input: { ...event.data, eventId: event.eventId ?? null } as Prisma.InputJsonValue,
+            output: { databaseActionCount: databaseActions.length, webhookActionCount: webhookActions.length },
+          },
+          select: { id: true },
+        });
+        executionId = execution.id;
+      } catch (error) {
+        // The unique (automationId, triggerEventId) constraint is the authoritative
+        // idempotency guard. Under a race, one invocation owns the execution and the
+        // other must leave it untouched rather than marking it failed.
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002" && event.eventId) continue;
+        throw error;
+      }
 
-      for (const action of webhookActions) await sendWebhook(event.tenantId, event.trigger, event.eventId, action, event);
+      try {
+        await prisma.$transaction(async tx => {
+          for (const action of databaseActions) await executeDatabaseAction(tx, event.tenantId, event.customerId, action);
+        });
 
-      await prisma.automationExecution.updateMany({ where: { automationId: automation.id, ...(event.eventId ? { triggerEventId: event.eventId } : { startedAt }) }, data: { status: "SUCCEEDED", finishedAt: new Date(), output: { actionCount: actions.length, databaseActionCount: databaseActions.length, webhookActionCount: webhookActions.length } } });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "automation_failed";
-      await prisma.automationExecution.updateMany({ where: { automationId: automation.id, ...(event.eventId ? { triggerEventId: event.eventId } : { startedAt }) }, data: { status: "FAILED", finishedAt: new Date(), error: message } });
+        for (const action of webhookActions) await sendWebhook(event.tenantId, event.trigger, event.eventId, action, event);
+
+        await prisma.automationExecution.updateMany({
+          where: { id: executionId },
+          data: {
+            status: "SUCCEEDED",
+            finishedAt: new Date(),
+            output: { actionCount: actions.length, databaseActionCount: databaseActions.length, webhookActionCount: webhookActions.length },
+          },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "automation_failed";
+        await prisma.automationExecution.updateMany({
+          where: { id: executionId, status: "RUNNING" },
+          data: { status: "FAILED", finishedAt: new Date(), error: message },
+        });
+      }
     }
   }
 };
