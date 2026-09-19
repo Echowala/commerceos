@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { prisma } from "@commerceos/database";
 import type { Prisma } from "@prisma/client";
-import { getRequestContext, requireTenant } from "./tenant.js";
+import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
 
 const json = (res: ServerResponse, status: number, data: unknown): void => {
   res.statusCode = status;
@@ -73,13 +73,13 @@ export const handleSegmentsRequest = async (req: IncomingMessage, res: ServerRes
   const url = new URL(req.url ?? "/", "http://localhost");
   if (!url.pathname.startsWith("/crm/segments")) return false;
   try {
-    const tenantId = requireTenant(getRequestContext(req.headers));
+    const context = getRequestContext(req.headers); const tenantId = requireTenant(context);
     if (url.pathname === "/crm/segments" && req.method === "GET") {
       const segments = await prisma.customerSegment.findMany({ where: { tenantId }, orderBy: { name: "asc" } });
       const customers = await prisma.customer.findMany({ where: { tenantId }, select: { id: true, orders: { select: { total: true, status: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 100 }, tags: { select: { tag: { select: { name: true } } } } } });
       return respond(res, 200, segments.map(segment => { const rules = parseRules(segment.rules); return { ...segment, customerCount: rules ? customers.filter(customer => matches(rules, customer)).length : 0 }; }));
     }
-    if (url.pathname === "/crm/segments" && req.method === "POST") {
+    if (url.pathname === "/crm/segments" && req.method === "POST") { requireRole(context, "OWNER", "ADMIN");
       const input = await readBody(req);
       const name = String(input.name ?? "").trim();
       const description = input.description == null ? null : String(input.description).trim() || null;
@@ -90,7 +90,7 @@ export const handleSegmentsRequest = async (req: IncomingMessage, res: ServerRes
       return respond(res, 201, await prisma.customerSegment.create({ data: { tenantId, name, description, rules: input.rules } }));
     }
     const match = url.pathname.match(/^\/crm\/segments\/([^/]+)$/);
-    if (match && req.method === "DELETE") {
+    if (match && req.method === "DELETE") { requireRole(context, "OWNER", "ADMIN");
       const deleted = await prisma.customerSegment.deleteMany({ where: { id: match[1], tenantId } });
       return deleted.count ? respond(res, 204, null) : respond(res, 404, { error: "segment_not_found" });
     }
@@ -108,6 +108,7 @@ export const handleSegmentsRequest = async (req: IncomingMessage, res: ServerRes
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message === "UNAUTHORIZED") return respond(res, 401, { error: "unauthorized" });
+    if (message === "FORBIDDEN") return respond(res, 403, { error: "forbidden" });
     if (message === "PAYLOAD_TOO_LARGE") return respond(res, 413, { error: "payload_too_large" });
     return respond(res, 500, { error: "internal_server_error" });
   }
