@@ -13,7 +13,7 @@ const port = Number(process.env.PORT ?? 4000);
 
 const server = createServer(async (req, res) => {
   const isPublicCheckout = (req.url ?? "/").match(/^\/public\/stores\/[^/]+\/[^/]+\/orders$/) && req.method === "POST";
-  if (!rateLimit(req, res, isPublicCheckout ? "public-checkout" : "api")) return;
+  if (!(await rateLimit(req, res, isPublicCheckout ? "public-checkout" : "api"))) return;
 
   if ((req.url ?? "/").startsWith("/inventory")) {
     const handled = await handleInventoryRequest(req, res);
