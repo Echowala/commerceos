@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import { prisma } from "@commerceos/database";
-import { createToken, hashPassword } from "./auth.js";
+import { createToken, verifyPassword } from "./auth.js";
 import { signup } from "./signup.js";
 import { createPublicOrder } from "./public-checkout.js";
 import { recordInventoryMovement } from "./inventory.js";
@@ -30,7 +30,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       if (process.env.NODE_ENV === "production" || process.env.ALLOW_DEV_LOGIN !== "true") return json(res, 404, { error: "not_found" });
       const input = await body(req);
       const user = await prisma.user.findFirst({ where: { email: String(input.email ?? "").trim().toLowerCase(), tenantId: input.tenantId } });
-      if (!user || user.passwordHash !== hashPassword(String(input.password ?? ""))) return json(res, 401, { error: "invalid_credentials" });
+      if (!user || !verifyPassword(String(input.password ?? ""), user.passwordHash)) return json(res, 401, { error: "invalid_credentials" });
       return json(res, 200, { token: createToken({ userId: user.id, tenantId: user.tenantId, role: user.role }) });
     }
 
