@@ -31,7 +31,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       const input = await body(req);
       const user = await prisma.user.findFirst({ where: { email: String(input.email ?? "").trim().toLowerCase(), tenantId: input.tenantId } });
       if (!user || !verifyPassword(String(input.password ?? ""), user.passwordHash)) return json(res, 401, { error: "invalid_credentials" });
-      return json(res, 200, { token: createToken({ userId: user.id, tenantId: user.tenantId, role: user.role }) });
+      return json(res, 200, { token: createToken({ userId: user.id, tenantId: user.tenantId, role: user.role, sessionVersion: user.sessionVersion }) });
     }
 
     const publicStoreMatch = url.pathname.match(/^\/public\/stores\/([^/]+)\/([^/]+)$/);
@@ -59,7 +59,11 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       return json(res, 200, { ...order, subtotal: order.subtotal.toString(), total: order.total.toString(), createdAt: order.createdAt.toISOString(), items: order.items.map(item => ({ ...item, unitPrice: item.unitPrice.toString(), total: item.total.toString() })) });
     }
 
-    const context = getRequestContext(req.headers); const tenantId = requireTenant(context);
+    const context = await getRequestContext(req.headers); const tenantId = requireTenant(context);
+    if (url.pathname === "/auth/logout" && req.method === "POST") {
+      await prisma.user.update({ where: { id: context.auth!.userId }, data: { sessionVersion: { increment: 1 } } });
+      return json(res, 200, { ok: true });
+    }
     if (url.pathname === "/me" && req.method === "GET") { const user = await prisma.user.findFirst({ where: { id: context.auth!.userId, tenantId }, select: { id: true, email: true, name: true, role: true, tenant: { select: { id: true, name: true, slug: true } } } }); return user ? json(res, 200, user) : json(res, 404, { error: "user_not_found" }); }
     if (url.pathname === "/dashboard" && req.method === "GET") { const [stores, products, orders, customers, revenue] = await Promise.all([prisma.store.count({ where: { tenantId } }), prisma.product.count({ where: { store: { tenantId }, status: "ACTIVE" } }), prisma.order.count({ where: { tenantId } }), prisma.customer.count({ where: { tenantId } }), prisma.order.aggregate({ where: { tenantId, paymentStatus: "PAID" }, _sum: { total: true } })]); return json(res, 200, { stores, products, orders, customers, revenue: revenue._sum.total?.toString() ?? "0" }); }
     if (url.pathname === "/stores" && req.method === "GET") return json(res, 200, await prisma.store.findMany({ where: { tenantId }, orderBy: { createdAt: "desc" } }));
