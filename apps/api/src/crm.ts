@@ -9,7 +9,7 @@ export const handleCrmRequest = async (req: IncomingMessage, res: ServerResponse
   const url = new URL(req.url ?? "/", "http://localhost");
   if (!url.pathname.startsWith("/crm/")) return false;
   try {
-    const context = getRequestContext(req.headers); const tenantId = requireTenant(context);
+    const context = await getRequestContext(req.headers); const tenantId = requireTenant(context);
 
     if (url.pathname === "/crm/tags" && req.method === "GET") {
       return json(res, 200, await prisma.customerTag.findMany({ where: { tenantId }, include: { _count: { select: { customers: true } } }, orderBy: { name: "asc" } })) as never;
