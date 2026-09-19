@@ -26,7 +26,13 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (url.pathname === "/health" && req.method === "GET") return json(res, 200, { name: "CommerceOS API", status: "ok" });
     if (url.pathname === "/ready" && req.method === "GET") { await prisma.$queryRaw`SELECT 1`; return json(res, 200, { status: "ready", database: "ok" }); }
     if (url.pathname === "/auth/signup" && req.method === "POST") return json(res, 201, await signup(await body(req)));
-    if (url.pathname === "/auth/dev-login" && req.method === "POST") { const input = await body(req); const user = await prisma.user.findFirst({ where: { email: String(input.email ?? "").trim().toLowerCase(), tenantId: input.tenantId } }); if (!user || user.passwordHash !== hashPassword(String(input.password ?? ""))) return json(res, 401, { error: "invalid_credentials" }); return json(res, 200, { token: createToken({ userId: user.id, tenantId: user.tenantId, role: user.role }) }); }
+    if (url.pathname === "/auth/dev-login" && req.method === "POST") {
+      if (process.env.NODE_ENV === "production" || process.env.ALLOW_DEV_LOGIN !== "true") return json(res, 404, { error: "not_found" });
+      const input = await body(req);
+      const user = await prisma.user.findFirst({ where: { email: String(input.email ?? "").trim().toLowerCase(), tenantId: input.tenantId } });
+      if (!user || user.passwordHash !== hashPassword(String(input.password ?? ""))) return json(res, 401, { error: "invalid_credentials" });
+      return json(res, 200, { token: createToken({ userId: user.id, tenantId: user.tenantId, role: user.role }) });
+    }
 
     const publicStoreMatch = url.pathname.match(/^\/public\/stores\/([^/]+)\/([^/]+)$/);
     if (publicStoreMatch && req.method === "GET") {
