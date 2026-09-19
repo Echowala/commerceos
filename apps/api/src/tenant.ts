@@ -14,3 +14,8 @@ export const requireTenant = (context: RequestContext) => {
   if (!context.auth || !context.tenantId) throw new Error("UNAUTHORIZED");
   return context.tenantId;
 };
+
+export const requireRole = (context: RequestContext, ...allowed: AuthClaims["role"][]) => {
+  if (!context.auth || !allowed.includes(context.auth.role)) throw new Error("FORBIDDEN");
+  return context.auth;
+};
