@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { prisma } from "@commerceos/database";
-import { getRequestContext, requireTenant } from "./tenant.js";
+import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
 
 const json = (res: ServerResponse, status: number, body: unknown): void => {
   res.statusCode = status;
@@ -58,6 +58,7 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
 
     const match = url.pathname.match(/^\/customers\/([^/]+)$/);
     if (match && req.method === "PATCH") {
+      requireRole(context, "OWNER", "ADMIN");
       const existing = await prisma.customer.findFirst({ where: { id: match[1], tenantId }, select: { id: true } });
       if (!existing) return respond(res, 404, { error: "customer_not_found" });
       const input = await readBody(req);
@@ -113,6 +114,7 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message === "UNAUTHORIZED") return respond(res, 401, { error: "unauthorized" });
+    if (message === "FORBIDDEN") return respond(res, 403, { error: "forbidden" });
     if (message === "PAYLOAD_TOO_LARGE") return respond(res, 413, { error: "payload_too_large" });
     return respond(res, 500, { error: "internal_server_error" });
   }
