@@ -34,7 +34,7 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
   if (!url.pathname.startsWith("/customers")) return false;
 
   try {
-    const context = getRequestContext(req.headers);
+    const context = await getRequestContext(req.headers);
     const tenantId = requireTenant(context);
 
     if (url.pathname === "/customers" && req.method === "GET") {
