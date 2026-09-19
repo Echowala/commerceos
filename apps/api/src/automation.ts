@@ -44,7 +44,7 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
   const url = new URL(req.url ?? "/", "http://localhost");
   if (!url.pathname.startsWith("/automations")) return false;
   try {
-    const context = getRequestContext(req.headers); const tenantId = requireTenant(context);
+    const context = await getRequestContext(req.headers); const tenantId = requireTenant(context);
     if (url.pathname === "/automations" && req.method === "GET") {
       const automations = await prisma.automation.findMany({ where: { tenantId }, orderBy: { updatedAt: "desc" }, include: { _count: { select: { executions: true } } } });
       return respond(res, 200, automations);
