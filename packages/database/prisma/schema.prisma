@@ -105,6 +105,7 @@ model User {
   role UserRole @default(STAFF)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  sessionVersion Int @default(0)
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   @@index([tenantId])
 }
