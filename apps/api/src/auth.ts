@@ -4,6 +4,7 @@ export type AuthClaims = {
   userId: string;
   tenantId: string;
   role: "OWNER" | "ADMIN" | "STAFF";
+  sessionVersion: number;
   exp: number;
 };
 
