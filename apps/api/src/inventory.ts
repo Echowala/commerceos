@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { getRequestContext, requireTenant } from "./tenant.js";
+import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
 import { prisma } from "@commerceos/database";
 import { triggerInventoryLowAutomation } from "./automation-hooks.js";
 
@@ -80,7 +80,7 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
     }
 
     const adjustMatch = url.pathname.match(/^\/inventory\/([^/]+)\/adjust$/);
-    if (adjustMatch && req.method === "POST") {
+    if (adjustMatch && req.method === "POST") { requireRole(context, "OWNER", "ADMIN");
       const input = await readBody(req);
       const quantity = Number(input.quantity);
       const type = String(input.type ?? "ADJUSTMENT") as AdjustmentType;
@@ -131,6 +131,7 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message === "UNAUTHORIZED") return json(res, 401, { error: "unauthorized" }) as never;
+    if (message === "FORBIDDEN") return json(res, 403, { error: "forbidden" }) as never;
     if (message === "INVENTORY_ITEM_NOT_FOUND") return json(res, 404, { error: "inventory_item_not_found" }) as never;
     if (message === "INSUFFICIENT_STOCK") return json(res, 409, { error: "insufficient_stock" }) as never;
     if (message === "INVENTORY_CONFLICT") return json(res, 409, { error: "inventory_conflict", message: "Stock changed while this adjustment was being processed. Please retry." }) as never;
