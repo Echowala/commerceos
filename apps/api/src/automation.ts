@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { prisma } from "@commerceos/database";
 import type { Prisma } from "@prisma/client";
-import { getRequestContext, requireTenant } from "./tenant.js";
+import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
 
 const json = (res: ServerResponse, status: number, data: unknown): void => {
   res.statusCode = status;
@@ -44,12 +44,12 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
   const url = new URL(req.url ?? "/", "http://localhost");
   if (!url.pathname.startsWith("/automations")) return false;
   try {
-    const tenantId = requireTenant(getRequestContext(req.headers));
+    const context = getRequestContext(req.headers); const tenantId = requireTenant(context);
     if (url.pathname === "/automations" && req.method === "GET") {
       const automations = await prisma.automation.findMany({ where: { tenantId }, orderBy: { updatedAt: "desc" }, include: { _count: { select: { executions: true } } } });
       return respond(res, 200, automations);
     }
-    if (url.pathname === "/automations" && req.method === "POST") {
+    if (url.pathname === "/automations" && req.method === "POST") { requireRole(context, "OWNER", "ADMIN");
       const input = await readBody(req);
       const name = String(input.name ?? "").trim();
       const description = input.description == null ? null : String(input.description).trim() || null;
@@ -67,7 +67,7 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
     }
 
     const testMatch = url.pathname.match(/^\/automations\/([^/]+)\/test$/);
-    if (testMatch && req.method === "POST") {
+    if (testMatch && req.method === "POST") { requireRole(context, "OWNER", "ADMIN");
       const automation = await prisma.automation.findFirst({ where: { id: testMatch[1], tenantId }, select: { id: true, trigger: true, status: true, conditions: true, actions: true } });
       if (!automation) return respond(res, 404, { error: "automation_not_found" });
       const input = await readBody(req);
@@ -87,7 +87,7 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
     }
 
     const match = url.pathname.match(/^\/automations\/([^/]+)$/);
-    if (match && req.method === "PATCH") {
+    if (match && req.method === "PATCH") { requireRole(context, "OWNER", "ADMIN");
       const existing = await prisma.automation.findFirst({ where: { id: match[1], tenantId }, select: { id: true } });
       if (!existing) return respond(res, 404, { error: "automation_not_found" });
       const input = await readBody(req);
@@ -102,7 +102,7 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
       try { return respond(res, 200, await prisma.automation.update({ where: { id: existing.id }, data })); }
       catch (error) { if (error instanceof Error && error.message.includes("Unique constraint")) return respond(res, 409, { error: "automation_already_exists" }); throw error; }
     }
-    if (match && req.method === "DELETE") {
+    if (match && req.method === "DELETE") { requireRole(context, "OWNER", "ADMIN");
       const deleted = await prisma.automation.deleteMany({ where: { id: match[1], tenantId } });
       return deleted.count ? respond(res, 204, null) : respond(res, 404, { error: "automation_not_found" });
     }
@@ -119,6 +119,7 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message === "UNAUTHORIZED") return respond(res, 401, { error: "unauthorized" });
+    if (message === "FORBIDDEN") return respond(res, 403, { error: "forbidden" });
     if (message === "PAYLOAD_TOO_LARGE") return respond(res, 413, { error: "payload_too_large" });
     if (error instanceof SyntaxError) return respond(res, 400, { error: "invalid_json" });
     return respond(res, 500, { error: "internal_server_error" });
