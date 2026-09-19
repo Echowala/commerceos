@@ -73,7 +73,7 @@ export const handleSegmentsRequest = async (req: IncomingMessage, res: ServerRes
   const url = new URL(req.url ?? "/", "http://localhost");
   if (!url.pathname.startsWith("/crm/segments")) return false;
   try {
-    const context = getRequestContext(req.headers); const tenantId = requireTenant(context);
+    const context = await getRequestContext(req.headers); const tenantId = requireTenant(context);
     if (url.pathname === "/crm/segments" && req.method === "GET") {
       const segments = await prisma.customerSegment.findMany({ where: { tenantId }, orderBy: { name: "asc" } });
       const customers = await prisma.customer.findMany({ where: { tenantId }, select: { id: true, orders: { select: { total: true, status: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 100 }, tags: { select: { tag: { select: { name: true } } } } } });
