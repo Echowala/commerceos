@@ -37,7 +37,7 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
   if (!url.pathname.startsWith("/inventory")) return false;
 
   try {
-    const context = getRequestContext(req.headers);
+    const context = await getRequestContext(req.headers);
     const tenantId = requireTenant(context);
     const userId = context.auth?.userId ?? null;
 
