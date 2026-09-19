@@ -16,5 +16,5 @@ export async function signup(input: { email?: string; password?: string; name?: 
     return { tenant, user, store };
   });
 
-  return { token: createToken({ userId: result.user.id, tenantId: result.tenant.id, role: result.user.role }), tenant: { id: result.tenant.id, name: result.tenant.name, slug: result.tenant.slug }, store: { id: result.store.id, name: result.store.name, slug: result.store.slug } };
+  return { token: createToken({ userId: result.user.id, tenantId: result.tenant.id, role: result.user.role, sessionVersion: result.user.sessionVersion }), tenant: { id: result.tenant.id, name: result.tenant.name, slug: result.tenant.slug }, store: { id: result.store.id, name: result.store.name, slug: result.store.slug } };
 }
