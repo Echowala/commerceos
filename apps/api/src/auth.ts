@@ -1,4 +1,4 @@
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
 export type AuthClaims = {
   userId: string;
@@ -10,7 +10,7 @@ export type AuthClaims = {
 const secret = process.env.AUTH_SECRET ?? (process.env.NODE_ENV === "production" ? (() => { throw new Error("AUTH_SECRET_REQUIRED"); })() : "development-only-change-me");
 
 const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
-const sign = (value: string) => createHash("sha256").update(`${value}.${secret}`).digest("base64url");
+const sign = (value: string) => createHmac("sha256", secret).update(value).digest("base64url");
 
 export const createToken = (claims: Omit<AuthClaims, "exp">, ttlSeconds = 60 * 60 * 24 * 7) => {
   const payload = encode({ ...claims, exp: Math.floor(Date.now() / 1000) + ttlSeconds });
