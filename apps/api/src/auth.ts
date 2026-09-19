@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
 export type AuthClaims = {
   userId: string;
@@ -30,5 +30,38 @@ export const verifyToken = (token: string): AuthClaims | null => {
   }
 };
 
-export const hashPassword = (password: string) => createHash("sha256").update(password).digest("hex");
+const SCRYPT_N = 16384;
+const SCRYPT_R = 8;
+const SCRYPT_P = 1;
+const SCRYPT_KEYLEN = 64;
+const SCRYPT_SALT_BYTES = 16;
+
+export const hashPassword = (password: string) => {
+  const salt = randomBytes(SCRYPT_SALT_BYTES);
+  const derived = scryptSync(password, salt, SCRYPT_KEYLEN, { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P, maxmem: 32 * 1024 * 1024 });
+  return ["scrypt", SCRYPT_N, SCRYPT_R, SCRYPT_P, salt.toString("base64url"), derived.toString("base64url")].join("$");
+};
+
+export const verifyPassword = (password: string, storedHash: string) => {
+  const parts = storedHash.split("$");
+  if (parts.length === 6 && parts[0] === "scrypt") {
+    const [, n, r, p, saltEncoded, hashEncoded] = parts;
+    const N = Number(n);
+    const R = Number(r);
+    const P = Number(p);
+    if (!Number.isInteger(N) || !Number.isInteger(R) || !Number.isInteger(P) || !saltEncoded || !hashEncoded) return false;
+    try {
+      const salt = Buffer.from(saltEncoded, "base64url");
+      const expected = Buffer.from(hashEncoded, "base64url");
+      const actual = scryptSync(password, salt, expected.length, { N, r: R, p: P, maxmem: 32 * 1024 * 1024 });
+      return actual.length === expected.length && timingSafeEqual(actual, expected);
+    } catch {
+      return false;
+    }
+  }
+
+  // Legacy SHA-256 hashes are accepted temporarily so existing dev accounts can still log in.
+  const legacy = createHash("sha256").update(password).digest("hex");
+  return storedHash.length === legacy.length && timingSafeEqual(Buffer.from(storedHash), Buffer.from(legacy));
+};
 export const generateSessionId = () => randomBytes(16).toString("hex");
