@@ -15,7 +15,7 @@ export const handleOrderStatusRequest = async (req: IncomingMessage, res: Server
   const url = new URL(req.url ?? "/", "http://localhost"); const match = url.pathname.match(/^\/orders\/([^/]+)\/status$/); if (!match || req.method !== "PATCH") return false;
   res.setHeader("access-control-allow-origin", process.env.WEB_ORIGIN ?? "http://localhost:3000"); res.setHeader("access-control-allow-headers", "content-type, authorization, idempotency-key"); res.setHeader("access-control-allow-methods", "GET, POST, PATCH, OPTIONS");
   try {
-    const context = getRequestContext(req.headers); const tenantId = requireTenant(context); requireRole(context, "OWNER", "ADMIN"); const input = await body(req); const status = String(input.status ?? "") as OrderStatus;
+    const context = await getRequestContext(req.headers); const tenantId = requireTenant(context); requireRole(context, "OWNER", "ADMIN"); const input = await body(req); const status = String(input.status ?? "") as OrderStatus;
     if (!orderStatuses.includes(status)) return json(res, 400, { error: "invalid_order_status" }) as never;
     const result = await prisma.$transaction(async tx => {
       const order = await tx.order.findFirst({ where: { id: match[1], tenantId }, include: { items: true } });
