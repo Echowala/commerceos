@@ -7,7 +7,7 @@ export type AuthClaims = {
   exp: number;
 };
 
-const secret = process.env.AUTH_SECRET ?? "development-only-change-me";
+const secret = process.env.AUTH_SECRET ?? (process.env.NODE_ENV === "production" ? (() => { throw new Error("AUTH_SECRET_REQUIRED"); })() : "development-only-change-me");
 
 const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
 const sign = (value: string) => createHash("sha256").update(`${value}.${secret}`).digest("base64url");
