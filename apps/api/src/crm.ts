@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { prisma } from "@commerceos/database";
-import { getRequestContext, requireTenant } from "./tenant.js";
+import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
 
 const json = (res: ServerResponse, status: number, body: unknown) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.end(JSON.stringify(body)); };
 const body = async (req: IncomingMessage) => { let raw = ""; for await (const chunk of req) raw += chunk; if (raw.length > 1_000_000) throw new Error("PAYLOAD_TOO_LARGE"); return raw ? JSON.parse(raw) : {}; };
@@ -14,7 +14,7 @@ export const handleCrmRequest = async (req: IncomingMessage, res: ServerResponse
     if (url.pathname === "/crm/tags" && req.method === "GET") {
       return json(res, 200, await prisma.customerTag.findMany({ where: { tenantId }, include: { _count: { select: { customers: true } } }, orderBy: { name: "asc" } })) as never;
     }
-    if (url.pathname === "/crm/tags" && req.method === "POST") {
+    if (url.pathname === "/crm/tags" && req.method === "POST") { requireRole(context, "OWNER", "ADMIN");
       const input = await body(req); const name = String(input.name ?? "").trim(); const color = input.color == null ? null : String(input.color).trim() || null;
       if (!name || name.length > 80) return json(res, 400, { error: "tag_name_required" }) as never;
       const existing = await prisma.customerTag.findFirst({ where: { tenantId, name } }); if (existing) return json(res, 409, { error: "tag_already_exists" }) as never;
