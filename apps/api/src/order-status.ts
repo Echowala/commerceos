@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { prisma } from "@commerceos/database";
 import { recordInventoryMovement } from "./inventory.js";
-import { getRequestContext, requireTenant } from "./tenant.js";
+import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
 import { triggerOrderStatusChangedAutomation } from "./automation-hooks.js";
 
 const json = (res: ServerResponse, status: number, body: unknown) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.end(JSON.stringify(body)); };
@@ -15,7 +15,7 @@ export const handleOrderStatusRequest = async (req: IncomingMessage, res: Server
   const url = new URL(req.url ?? "/", "http://localhost"); const match = url.pathname.match(/^\/orders\/([^/]+)\/status$/); if (!match || req.method !== "PATCH") return false;
   res.setHeader("access-control-allow-origin", process.env.WEB_ORIGIN ?? "http://localhost:3000"); res.setHeader("access-control-allow-headers", "content-type, authorization, idempotency-key"); res.setHeader("access-control-allow-methods", "GET, POST, PATCH, OPTIONS");
   try {
-    const context = getRequestContext(req.headers); const tenantId = requireTenant(context); const input = await body(req); const status = String(input.status ?? "") as OrderStatus;
+    const context = getRequestContext(req.headers); const tenantId = requireTenant(context); requireRole(context, "OWNER", "ADMIN"); const input = await body(req); const status = String(input.status ?? "") as OrderStatus;
     if (!orderStatuses.includes(status)) return json(res, 400, { error: "invalid_order_status" }) as never;
     const result = await prisma.$transaction(async tx => {
       const order = await tx.order.findFirst({ where: { id: match[1], tenantId }, include: { items: true } });
@@ -85,6 +85,7 @@ export const handleOrderStatusRequest = async (req: IncomingMessage, res: Server
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message === "UNAUTHORIZED") return json(res, 401, { error: "unauthorized" }) as never;
+    if (message === "FORBIDDEN") return json(res, 403, { error: "forbidden" }) as never;
     if (message === "PAYLOAD_TOO_LARGE") return json(res, 413, { error: "payload_too_large" }) as never;
     if (message === "ORDER_NOT_FOUND") return json(res, 404, { error: "order_not_found" }) as never;
     if (message.startsWith("INVALID_ORDER_TRANSITION:")) { const [, from, to] = message.split(":"); return json(res, 409, { error: "invalid_order_transition", from, to }) as never; }
