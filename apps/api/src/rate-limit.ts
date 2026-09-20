@@ -11,9 +11,8 @@ let redis: RedisClientType | null = null;
 let redisConnectPromise: Promise<void> | null = null;
 
 const getClientKey = (req: IncomingMessage) => {
-  const forwarded = req.headers["x-forwarded-for"];
-  const ip = typeof forwarded === "string" ? forwarded.split(",")[0].trim() : req.socket.remoteAddress ?? "unknown";
-  return ip;
+  const forwarded = process.env.TRUSTED_PROXY === "true" ? req.headers["x-forwarded-for"] : undefined;
+  return typeof forwarded === "string" && forwarded.trim() ? forwarded.split(",")[0].trim() : req.socket.remoteAddress ?? "unknown";
 };
 
 const getRedis = async () => {
