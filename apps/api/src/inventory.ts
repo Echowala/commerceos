@@ -129,7 +129,9 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
 
     return json(res, 404, { error: "inventory_route_not_found" }) as never;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "";
+    const message = error instanceof SyntaxError ? "SyntaxError" : error instanceof Error ? error.message : "";
+    if (message === "PAYLOAD_TOO_LARGE") return json(res, 413, { error: "payload_too_large" }) as never;
+    if (message === "SyntaxError") return json(res, 400, { error: "invalid_json" }) as never;
     if (message === "UNAUTHORIZED") return json(res, 401, { error: "unauthorized" }) as never;
     if (message === "FORBIDDEN") return json(res, 403, { error: "forbidden" }) as never;
     if (message === "INVENTORY_ITEM_NOT_FOUND") return json(res, 404, { error: "inventory_item_not_found" }) as never;
