@@ -11,6 +11,26 @@ import { rateLimit } from "./rate-limit.js";
 
 const port = Number(process.env.PORT ?? 4000);
 const trustedProxy = process.env.TRUSTED_PROXY === "true";
+const MAX_JSON_BYTES = 1_000_000;
+
+const rejectInvalidRequest = (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => {
+  if (!["POST", "PATCH", "PUT"].includes(req.method ?? "")) return false;
+  const contentLength = Number(req.headers["content-length"] ?? 0);
+  if (contentLength > MAX_JSON_BYTES) {
+    res.statusCode = 413;
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.end(JSON.stringify({ error: "payload_too_large" }));
+    return true;
+  }
+  const contentType = req.headers["content-type"]?.split(";")[0].trim().toLowerCase();
+  if (contentType && contentType !== "application/json") {
+    res.statusCode = 415;
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.end(JSON.stringify({ error: "unsupported_media_type" }));
+    return true;
+  }
+  return false;
+};
 
 const getClientIp = (req: import("node:http").IncomingMessage) => {
   if (trustedProxy) {
@@ -21,6 +41,7 @@ const getClientIp = (req: import("node:http").IncomingMessage) => {
 };
 
 const server = createServer(async (req, res) => {
+  if (rejectInvalidRequest(req, res)) return;
   const isPublicCheckout = (req.url ?? "/").match(/^\/public\/stores\/[^/]+\/[^/]+\/orders$/) && req.method === "POST";
   if (!(await rateLimit(req, res, isPublicCheckout ? "public-checkout" : "api"))) return;
 
