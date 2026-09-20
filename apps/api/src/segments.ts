@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { prisma } from "@commerceos/database";
 import type { Prisma } from "@prisma/client";
 import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
+import { audit } from "./audit.js";
 
 const json = (res: ServerResponse, status: number, data: unknown): void => {
   res.statusCode = status;
@@ -87,7 +88,9 @@ export const handleSegmentsRequest = async (req: IncomingMessage, res: ServerRes
       if (!validRules(input.rules)) return respond(res, 400, { error: "invalid_segment_rules" });
       const existing = await prisma.customerSegment.findFirst({ where: { tenantId, name }, select: { id: true } });
       if (existing) return respond(res, 409, { error: "segment_already_exists" });
-      return respond(res, 201, await prisma.customerSegment.create({ data: { tenantId, name, description, rules: input.rules } }));
+      const segment = await prisma.customerSegment.create({ data: { tenantId, name, description, rules: input.rules } });
+      await audit(tenantId, context.auth!.userId, "SEGMENT_CREATED", "CustomerSegment", segment.id, req, { name: segment.name });
+      return respond(res, 201, segment);
     }
     const match = url.pathname.match(/^\/crm\/segments\/([^/]+)$/);
     if (match && req.method === "DELETE") { requireRole(context, "OWNER", "ADMIN");
