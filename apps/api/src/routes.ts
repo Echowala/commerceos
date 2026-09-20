@@ -8,6 +8,15 @@ import { recordInventoryMovement } from "./inventory.js";
 import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
 import { triggerInventoryLowAutomation, triggerOrderPlacedAutomation } from "./automation-hooks.js";
 
+const audit = async (tenantId: string, userId: string | null, action: string, resource: string, resourceId: string | null, req: IncomingMessage, metadata?: unknown) => {
+  await prisma.auditLog.create({ data: {
+    tenantId, userId, action, resource, resourceId,
+    metadata: metadata as any,
+    ipAddress: req.socket.remoteAddress ?? null,
+    userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : null,
+  }});
+};
+
 const json = (res: ServerResponse, status: number, body: unknown) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.end(JSON.stringify(body)); };
 const body = async (req: IncomingMessage) => { let raw = ""; for await (const chunk of req) raw += chunk; if (raw.length > 1_000_000) throw new Error("PAYLOAD_TOO_LARGE"); return raw ? JSON.parse(raw) : {}; };
 const slugify = (value: string) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -67,12 +76,15 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     const context = await getRequestContext(req.headers); const tenantId = requireTenant(context);
     if (url.pathname === "/auth/logout" && req.method === "POST") {
       await prisma.user.update({ where: { id: context.auth!.userId }, data: { sessionVersion: { increment: 1 } } });
+      await audit(tenantId, context.auth!.userId, "AUTH_LOGOUT", "User", context.auth!.userId, req);
       return json(res, 200, { ok: true });
     }
     if (url.pathname === "/me" && req.method === "GET") { const user = await prisma.user.findFirst({ where: { id: context.auth!.userId, tenantId }, select: { id: true, email: true, name: true, role: true, tenant: { select: { id: true, name: true, slug: true } } } }); return user ? json(res, 200, user) : json(res, 404, { error: "user_not_found" }); }
     if (url.pathname === "/dashboard" && req.method === "GET") { const [stores, products, orders, customers, revenue] = await Promise.all([prisma.store.count({ where: { tenantId } }), prisma.product.count({ where: { store: { tenantId }, status: "ACTIVE" } }), prisma.order.count({ where: { tenantId } }), prisma.customer.count({ where: { tenantId } }), prisma.order.aggregate({ where: { tenantId, paymentStatus: "PAID" }, _sum: { total: true } })]); return json(res, 200, { stores, products, orders, customers, revenue: revenue._sum.total?.toString() ?? "0" }); }
     if (url.pathname === "/stores" && req.method === "GET") return json(res, 200, await prisma.store.findMany({ where: { tenantId }, orderBy: { createdAt: "desc" } }));
-    if (url.pathname === "/stores" && req.method === "POST") { requireRole(context, "OWNER", "ADMIN"); const input = await body(req); if (!input.name) return json(res, 400, { error: "name is required" }); const slug = slugify(input.slug ?? input.name); if (!slug) return json(res, 400, { error: "valid slug is required" }); return json(res, 201, await prisma.store.create({ data: { tenantId, name: input.name, slug, currency: input.currency ?? "PKR" } })); }
+    if (url.pathname === "/stores" && req.method === "POST") { requireRole(context, "OWNER", "ADMIN"); const input = await body(req); if (!input.name) return json(res, 400, { error: "name is required" }); const slug = slugify(input.slug ?? input.name); if (!slug) return json(res, 400, { error: "valid slug is required" }); const createdStore = await prisma.store.create({ data: { tenantId, name: input.name, slug, currency: input.currency ?? "PKR" } });
+      await audit(tenantId, context.auth!.userId, "STORE_CREATED", "Store", createdStore.id, req, { name: createdStore.name });
+      return json(res, 201, createdStore); }
     if (url.pathname === "/products" && req.method === "GET") return json(res, 200, await prisma.product.findMany({ where: { store: { tenantId } }, include: { variants: true }, orderBy: { createdAt: "desc" } }));
     const productMatch = url.pathname.match(/^\/products\/([^/]+)$/);
     if (productMatch && req.method === "GET") { const product = await prisma.product.findFirst({ where: { id: productMatch[1], store: { tenantId } }, include: { variants: true, store: { select: { id: true, name: true, currency: true } } } }); return product ? json(res, 200, product) : json(res, 404, { error: "product_not_found" }); }
