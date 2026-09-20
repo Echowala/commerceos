@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
 import { prisma } from "@commerceos/database";
 import { triggerInventoryLowAutomation } from "./automation-hooks.js";
+import { audit } from "./audit.js";
 
 const json = (res: ServerResponse, status: number, body: unknown) => {
   res.statusCode = status;
@@ -124,6 +125,14 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
       if (result.crossedIntoLowStock) {
         void triggerInventoryLowAutomation({ tenantId, productId: result.variant.productId, variantId: result.variant.id, stock: result.variant.stock, threshold: LOW_STOCK_THRESHOLD, referenceId: result.movement.id }).catch(() => undefined);
       }
+      await audit(tenantId, userId, "INVENTORY_ADJUSTED", "ProductVariant", result.variant.id, req, {
+        productId: result.variant.productId,
+        movementId: result.movement.id,
+        type,
+        quantity,
+        stockBefore: result.movement.stockBefore,
+        stockAfter: result.movement.stockAfter,
+      });
       return json(res, 200, { ...result, crossedIntoLowStock: undefined, variant: { ...result.variant, price: result.variant.price.toString() } }) as never;
     }
 
