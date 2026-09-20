@@ -10,8 +10,18 @@ import { handleAutomationRequest } from "./automation.js";
 import { rateLimit } from "./rate-limit.js";
 
 const port = Number(process.env.PORT ?? 4000);
+const trustedProxy = process.env.TRUSTED_PROXY === "true";
+
+const getClientIp = (req: import("node:http").IncomingMessage) => {
+  if (trustedProxy) {
+    const forwarded = req.headers["x-forwarded-for"];
+    if (typeof forwarded === "string" && forwarded.trim()) return forwarded.split(",")[0].trim();
+  }
+  return req.socket.remoteAddress ?? "unknown";
+};
 
 const server = createServer(async (req, res) => {
+  res.setHeader("x-client-ip", getClientIp(req));
   const isPublicCheckout = (req.url ?? "/").match(/^\/public\/stores\/[^/]+\/[^/]+\/orders$/) && req.method === "POST";
   if (!(await rateLimit(req, res, isPublicCheckout ? "public-checkout" : "api"))) return;
 
