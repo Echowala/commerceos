@@ -3,6 +3,7 @@ import { prisma } from "@commerceos/database";
 import { recordInventoryMovement } from "./inventory.js";
 import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
 import { triggerOrderStatusChangedAutomation } from "./automation-hooks.js";
+import { audit } from "./audit.js";
 
 const json = (res: ServerResponse, status: number, body: unknown) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.end(JSON.stringify(body)); };
 const body = async (req: IncomingMessage) => { let raw = ""; for await (const chunk of req) raw += chunk; if (raw.length > 1_000_000) throw new Error("PAYLOAD_TOO_LARGE"); return raw ? JSON.parse(raw) : {}; };
@@ -80,6 +81,13 @@ export const handleOrderStatusRequest = async (req: IncomingMessage, res: Server
     });
     if (result.from !== result.status) {
       void triggerOrderStatusChangedAutomation({ tenantId, customerId: result.customerId, orderId: result.id, orderNumber: result.orderNumber, from: result.from, to: result.status }).catch(() => undefined);
+    }
+    if (result.from !== result.status) {
+      await audit(tenantId, context.auth!.userId, "ORDER_STATUS_CHANGED", "Order", result.id, req, {
+        orderNumber: result.orderNumber,
+        from: result.from,
+        to: result.status,
+      });
     }
     return json(res, 200, { id: result.id, orderNumber: result.orderNumber, status: result.status }) as never;
   } catch (error) {
