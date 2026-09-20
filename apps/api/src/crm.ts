@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { prisma } from "@commerceos/database";
 import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
+import { audit } from "./audit.js";
 
 const json = (res: ServerResponse, status: number, body: unknown) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.end(JSON.stringify(body)); };
 const body = async (req: IncomingMessage) => { let raw = ""; for await (const chunk of req) raw += chunk; if (raw.length > 1_000_000) throw new Error("PAYLOAD_TOO_LARGE"); return raw ? JSON.parse(raw) : {}; };
@@ -18,7 +19,9 @@ export const handleCrmRequest = async (req: IncomingMessage, res: ServerResponse
       const input = await body(req); const name = String(input.name ?? "").trim(); const color = input.color == null ? null : String(input.color).trim() || null;
       if (!name || name.length > 80) return json(res, 400, { error: "tag_name_required" }) as never;
       const existing = await prisma.customerTag.findFirst({ where: { tenantId, name } }); if (existing) return json(res, 409, { error: "tag_already_exists" }) as never;
-      return json(res, 201, await prisma.customerTag.create({ data: { tenantId, name, color } })) as never;
+      const tag = await prisma.customerTag.create({ data: { tenantId, name, color } });
+      await audit(tenantId, context.auth!.userId, "CRM_TAG_CREATED", "CustomerTag", tag.id, req, { name: tag.name });
+      return json(res, 201, tag) as never;
     }
 
     const customerTags = url.pathname.match(/^\/crm\/customers\/([^/]+)\/tags$/);
@@ -36,7 +39,9 @@ export const handleCrmRequest = async (req: IncomingMessage, res: ServerResponse
     if (customerTags && req.method === "DELETE") {
       const customerId = customerTags[1]; const tagId = String(url.searchParams.get("tagId") ?? "").trim(); if (!tagId) return json(res, 400, { error: "tagId is required" }) as never;
       const customer = await prisma.customer.findFirst({ where: { id: customerId, tenantId }, select: { id: true } }); if (!customer) return json(res, 404, { error: "customer_not_found" }) as never;
-      await prisma.customerTagAssignment.deleteMany({ where: { customerId, tagId, tag: { tenantId } } }); return json(res, 204, null) as never;
+      const deleted = await prisma.customerTagAssignment.deleteMany({ where: { customerId, tagId, tag: { tenantId } } });
+      if (deleted.count) await audit(tenantId, context.auth!.userId, "CRM_TAG_REMOVED", "Customer", customerId, req, { tagId });
+      return json(res, 204, null) as never;
     }
 
     const customerEvents = url.pathname.match(/^\/crm\/customers\/([^/]+)\/events$/);
@@ -49,7 +54,9 @@ export const handleCrmRequest = async (req: IncomingMessage, res: ServerResponse
       const customerId = customerEvents[1]; const input = await body(req); const note = String(input.note ?? "").trim();
       if (!note || note.length > 2000) return json(res, 400, { error: "note_required" }) as never;
       const customer = await prisma.customer.findFirst({ where: { id: customerId, tenantId }, select: { id: true } }); if (!customer) return json(res, 404, { error: "customer_not_found" }) as never;
-      return json(res, 201, await prisma.customerEvent.create({ data: { tenantId, customerId, type: "NOTE", data: { note, createdByUserId: context.auth?.userId ?? null } } })) as never;
+      const event = await prisma.customerEvent.create({ data: { tenantId, customerId, type: "NOTE", data: { note, createdByUserId: context.auth?.userId ?? null } } });
+      await audit(tenantId, context.auth!.userId, "CRM_NOTE_CREATED", "Customer", customerId, req, { eventId: event.id });
+      return json(res, 201, event) as never;
     }
     return json(res, 404, { error: "crm_route_not_found" }) as never;
   } catch (error) {
