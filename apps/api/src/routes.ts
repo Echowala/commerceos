@@ -21,6 +21,11 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
   res.setHeader("access-control-allow-headers", "content-type, authorization, idempotency-key");
   res.setHeader("access-control-allow-methods", "GET, POST, PATCH, OPTIONS");
   if (req.method === "OPTIONS") return json(res, 204, null);
+  res.setHeader("x-content-type-options", "nosniff");
+  res.setHeader("x-frame-options", "DENY");
+  res.setHeader("referrer-policy", "no-referrer");
+  res.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=()");
+  if (process.env.NODE_ENV === "production") res.setHeader("strict-transport-security", "max-age=31536000; includeSubDomains");
   try {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname === "/health" && req.method === "GET") return json(res, 200, { name: "CommerceOS API", status: "ok" });
