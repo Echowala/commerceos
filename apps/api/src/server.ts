@@ -21,7 +21,6 @@ const getClientIp = (req: import("node:http").IncomingMessage) => {
 };
 
 const server = createServer(async (req, res) => {
-  res.setHeader("x-client-ip", getClientIp(req));
   const isPublicCheckout = (req.url ?? "/").match(/^\/public\/stores\/[^/]+\/[^/]+\/orders$/) && req.method === "POST";
   if (!(await rateLimit(req, res, isPublicCheckout ? "public-checkout" : "api"))) return;
 
