@@ -71,6 +71,27 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       await audit(tenantId, context.auth!.userId, "AUTH_LOGOUT", "User", context.auth!.userId, req);
       return json(res, 200, { ok: true });
     }
+    if (url.pathname === "/audit-logs" && req.method === "GET") {
+      requireRole(context, "OWNER", "ADMIN");
+      const requestedLimit = Number(url.searchParams.get("limit") ?? 50);
+      const limit = Number.isFinite(requestedLimit) ? Math.min(100, Math.max(1, Math.floor(requestedLimit))) : 50;
+      const requestedPage = Number(url.searchParams.get("page") ?? 1);
+      const page = Number.isFinite(requestedPage) ? Math.max(1, Math.floor(requestedPage)) : 1;
+      const action = String(url.searchParams.get("action") ?? "").trim();
+      const resource = String(url.searchParams.get("resource") ?? "").trim();
+      const search = String(url.searchParams.get("search") ?? "").trim();
+      const where = {
+        tenantId,
+        ...(action ? { action } : {}),
+        ...(resource ? { resource } : {}),
+        ...(search ? { OR: [{ action: { contains: search, mode: "insensitive" as const } }, { resource: { contains: search, mode: "insensitive" as const } }, { resourceId: { contains: search, mode: "insensitive" as const } }] } : {}),
+      };
+      const [items, total] = await Promise.all([
+        prisma.auditLog.findMany({ where, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit }),
+        prisma.auditLog.count({ where }),
+      ]);
+      return json(res, 200, { items, page, limit, total, pages: Math.ceil(total / limit) });
+    }
     if (url.pathname === "/me" && req.method === "GET") { const user = await prisma.user.findFirst({ where: { id: context.auth!.userId, tenantId }, select: { id: true, email: true, name: true, role: true, tenant: { select: { id: true, name: true, slug: true } } } }); return user ? json(res, 200, user) : json(res, 404, { error: "user_not_found" }); }
     if (url.pathname === "/dashboard" && req.method === "GET") { const [stores, products, orders, customers, revenue] = await Promise.all([prisma.store.count({ where: { tenantId } }), prisma.product.count({ where: { store: { tenantId }, status: "ACTIVE" } }), prisma.order.count({ where: { tenantId } }), prisma.customer.count({ where: { tenantId } }), prisma.order.aggregate({ where: { tenantId, paymentStatus: "PAID" }, _sum: { total: true } })]); return json(res, 200, { stores, products, orders, customers, revenue: revenue._sum.total?.toString() ?? "0" }); }
     if (url.pathname === "/stores" && req.method === "GET") return json(res, 200, await prisma.store.findMany({ where: { tenantId }, orderBy: { createdAt: "desc" } }));
