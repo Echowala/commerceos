@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { prisma } from "@commerceos/database";
 import type { Prisma } from "@prisma/client";
 import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
+import { audit } from "./audit.js";
 
 const json = (res: ServerResponse, status: number, data: unknown): void => {
   res.statusCode = status;
@@ -63,6 +64,7 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
       const existing = await prisma.automation.findFirst({ where: { tenantId, name }, select: { id: true } });
       if (existing) return respond(res, 409, { error: "automation_already_exists" });
       const automation = await prisma.automation.create({ data: { tenantId, name, description, trigger, status, conditions: (input.conditions ?? {}) as Prisma.InputJsonValue, actions: input.actions as Prisma.InputJsonValue } });
+      await audit(tenantId, context.auth!.userId, "AUTOMATION_CREATED", "Automation", automation.id, req, { trigger: automation.trigger, status: automation.status });
       return respond(res, 201, automation);
     }
 
@@ -99,7 +101,15 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
       if (input.conditions !== undefined) { if (!validConditions(input.conditions)) return respond(res, 400, { error: "invalid_automation_conditions" }); data.conditions = input.conditions as Prisma.InputJsonValue; }
       if (input.actions !== undefined) { if (!validConfig(input.actions)) return respond(res, 400, { error: "invalid_automation_actions" }); data.actions = input.actions as Prisma.InputJsonValue; }
       if (!Object.keys(data).length) return respond(res, 400, { error: "no_automation_fields" });
-      try { return respond(res, 200, await prisma.automation.update({ where: { id: existing.id }, data })); }
+      try {
+        const updated = await prisma.automation.update({ where: { id: existing.id }, data });
+        await audit(tenantId, context.auth!.userId, "AUTOMATION_UPDATED", "Automation", updated.id, req, {
+          fields: Object.keys(data),
+          status: updated.status,
+          trigger: updated.trigger,
+        });
+        return respond(res, 200, updated);
+      }
       catch (error) { if (error instanceof Error && error.message.includes("Unique constraint")) return respond(res, 409, { error: "automation_already_exists" }); throw error; }
     }
     if (match && req.method === "DELETE") { requireRole(context, "OWNER", "ADMIN");
