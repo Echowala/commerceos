@@ -12,7 +12,10 @@ const json = (res: ServerResponse, status: number, body: unknown) => {
 
 const readBody = async (req: IncomingMessage) => {
   let raw = "";
-  for await (const chunk of req) raw += chunk;
+  for await (const chunk of req) {
+    raw += chunk;
+    if (Buffer.byteLength(raw, "utf8") > 100_000) throw new Error("PAYLOAD_TOO_LARGE");
+  }
   return raw ? JSON.parse(raw) : {};
 };
 
