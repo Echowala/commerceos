@@ -7,7 +7,7 @@ import { handleCustomersRequest } from "./customers.js";
 import { handleCrmRequest } from "./crm.js";
 import { handleSegmentsRequest } from "./segments.js";
 import { handleAutomationRequest } from "./automation.js";
-import { rateLimit } from "./rate-limit.js";
+import { checkRateLimitDependency, rateLimit } from "./rate-limit.js";
 
 const port = Number(process.env.PORT ?? 4000);
 const trustedProxy = process.env.TRUSTED_PROXY === "true";
@@ -41,7 +41,7 @@ const getClientIp = (req: import("node:http").IncomingMessage) => {
 };
 
 const server = createServer(async (req, res) => {
-  if (rejectInvalidRequest(req, res)) return;
+  try {\n    if (rejectInvalidRequest(req, res)) return;
   const isPublicCheckout = (req.url ?? "/").match(/^\/public\/stores\/[^/]+\/[^/]+\/orders$/) && req.method === "POST";
   if (!(await rateLimit(req, res, isPublicCheckout ? "public-checkout" : "api"))) return;
 
