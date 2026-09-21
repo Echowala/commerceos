@@ -95,6 +95,7 @@ export const handleSegmentsRequest = async (req: IncomingMessage, res: ServerRes
     const match = url.pathname.match(/^\/crm\/segments\/([^/]+)$/);
     if (match && req.method === "DELETE") { requireRole(context, "OWNER", "ADMIN");
       const deleted = await prisma.customerSegment.deleteMany({ where: { id: match[1], tenantId } });
+      if (deleted.count) await audit(tenantId, context.auth!.userId, "SEGMENT_DELETED", "CustomerSegment", match[1], req);
       return deleted.count ? respond(res, 204, null) : respond(res, 404, { error: "segment_not_found" });
     }
     const members = url.pathname.match(/^\/crm\/segments\/([^/]+)\/customers$/);
