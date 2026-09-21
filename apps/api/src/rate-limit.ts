@@ -84,3 +84,10 @@ setInterval(() => {
   const now = Date.now();
   for (const [key, bucket] of buckets) if (bucket.resetAt <= now) buckets.delete(key);
 }, WINDOW_MS).unref();
+
+export const checkRateLimitDependency = async (): Promise<void> => {
+  if (!process.env.REDIS_URL || process.env.REDIS_REQUIRED !== "true") return;
+  const client = await getRedis();
+  if (!client) throw new Error("REDIS_REQUIRED");
+  await client.ping();
+};
