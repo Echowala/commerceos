@@ -1,4 +1,5 @@
 import { prisma } from "@commerceos/database";
+import type { Prisma } from "@prisma/client";
 import { triggerAutomations } from "./automation-engine.js";
 
 type Event = {
@@ -40,8 +41,3 @@ export const triggerInventoryLowAutomation = async (event: { tenantId: string; p
   await enqueueAutomationEvent({ tenantId: event.tenantId, trigger: "INVENTORY_LOW", eventId, data: { productId: event.productId, variantId: event.variantId, stock: event.stock, threshold: event.threshold } });
 };
 
-export const processAutomationJob = async (jobId: string): Promise<void> => {
-  const job = await prisma.automationJob.findUnique({ where: { id: jobId } });
-  if (!job) return;
-  await triggerAutomations({ tenantId: job.tenantId, trigger: job.trigger as Event["trigger"], eventId: job.eventId, customerId: job.customerId, data: job.data as Record<string, unknown> });
-};
