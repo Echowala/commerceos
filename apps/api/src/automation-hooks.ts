@@ -9,8 +9,8 @@ type Event = {
   data: Record<string, unknown>;
 };
 
-export const enqueueAutomationEvent = async (event: Event): Promise<void> => {
-  await prisma.automationJob.upsert({
+export const enqueueAutomationEvent = async (event: Event, db: Prisma.TransactionClient | typeof prisma = prisma): Promise<void> => {
+  await db.automationJob.upsert({
     where: { eventId: event.eventId },
     create: {
       tenantId: event.tenantId,
