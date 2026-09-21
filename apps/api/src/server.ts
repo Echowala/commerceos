@@ -8,7 +8,6 @@ import { handleCrmRequest } from "./crm.js";
 import { handleSegmentsRequest } from "./segments.js";
 import { handleAutomationRequest } from "./automation.js";
 import { checkRateLimitDependency, rateLimit } from "./rate-limit.js";
-import { startAutomationWorker } from "./automation-worker.js";
 
 const port = Number(process.env.PORT ?? 4000);
 const MAX_JSON_BYTES = 1_000_000;
@@ -80,13 +79,11 @@ server.headersTimeout = 15_000;
 server.requestTimeout = 30_000;
 
 server.listen(port, () => console.log(`CommerceOS API listening on :${port}`));
-const stopAutomationWorker = startAutomationWorker();
 
 let shuttingDown = false;
 const shutdown = async () => {
   if (shuttingDown) return;
   shuttingDown = true;
-  stopAutomationWorker();
   server.close();
   const forceExit = setTimeout(() => process.exit(1), 10_000);
   forceExit.unref();
