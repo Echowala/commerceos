@@ -10,7 +10,6 @@ import { handleAutomationRequest } from "./automation.js";
 import { checkRateLimitDependency, rateLimit } from "./rate-limit.js";
 
 const port = Number(process.env.PORT ?? 4000);
-const trustedProxy = process.env.TRUSTED_PROXY === "true";
 const MAX_JSON_BYTES = 1_000_000;
 
 const rejectInvalidRequest = (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => {
