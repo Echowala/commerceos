@@ -119,12 +119,11 @@ export const handleInventoryRequest = async (req: IncomingMessage, res: ServerRe
           createdByUserId: userId,
         });
         const updated = await tx.productVariant.findUniqueOrThrow({ where: { id: variant.id } });
-        return { variant: updated, movement, crossedIntoLowStock: variant.stock > LOW_STOCK_THRESHOLD && nextStock > 0 && nextStock <= LOW_STOCK_THRESHOLD };
+        const crossedIntoLowStock = variant.stock > LOW_STOCK_THRESHOLD && nextStock > 0 && nextStock <= LOW_STOCK_THRESHOLD;
+        if (crossedIntoLowStock) await triggerInventoryLowAutomation({ tenantId, productId: variant.productId, variantId: variant.id, stock: nextStock, threshold: LOW_STOCK_THRESHOLD, referenceId: movement.id }, tx);
+        return { variant: updated, movement, crossedIntoLowStock };
       });
 
-      if (result.crossedIntoLowStock) {
-        void triggerInventoryLowAutomation({ tenantId, productId: result.variant.productId, variantId: result.variant.id, stock: result.variant.stock, threshold: LOW_STOCK_THRESHOLD, referenceId: result.movement.id }).catch(() => undefined);
-      }
       await audit(tenantId, userId, "INVENTORY_ADJUSTED", "ProductVariant", result.variant.id, req, {
         productId: result.variant.productId,
         movementId: result.movement.id,
