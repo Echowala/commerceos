@@ -31,51 +31,64 @@ const rejectInvalidRequest = (req: import("node:http").IncomingMessage, res: imp
   return false;
 };
 
-const getClientIp = (req: import("node:http").IncomingMessage) => {
-  if (trustedProxy) {
-    const forwarded = req.headers["x-forwarded-for"];
-    if (typeof forwarded === "string" && forwarded.trim()) return forwarded.split(",")[0].trim();
-  }
-  return req.socket.remoteAddress ?? "unknown";
-};
-
 const server = createServer(async (req, res) => {
-  try {\n    if (rejectInvalidRequest(req, res)) return;
-  const isPublicCheckout = (req.url ?? "/").match(/^\/public\/stores\/[^/]+\/[^/]+\/orders$/) && req.method === "POST";
-  if (!(await rateLimit(req, res, isPublicCheckout ? "public-checkout" : "api"))) return;
+  try {
+    if (rejectInvalidRequest(req, res)) return;
+    const isPublicCheckout = (req.url ?? "/").match(/^\/public\/stores\/[^/]+\/[^/]+\/orders$/) && req.method === "POST";
+    if (!(await rateLimit(req, res, isPublicCheckout ? "public-checkout" : "api"))) return;
 
-  if ((req.url ?? "/").startsWith("/inventory")) {
-    const handled = await handleInventoryRequest(req, res);
-    if (handled) return;
+    if ((req.url ?? "/").startsWith("/inventory")) {
+      const handled = await handleInventoryRequest(req, res);
+      if (handled) return;
+    }
+    if ((req.url ?? "/").match(/^\/orders\/[^/]+\/status$/)) {
+      const handled = await handleOrderStatusRequest(req, res);
+      if (handled) return;
+    }
+    if ((req.url ?? "/").startsWith("/customers")) {
+      const handled = await handleCustomersRequest(req, res);
+      if (handled) return;
+    }
+    if ((req.url ?? "/").startsWith("/automations")) {
+      const handled = await handleAutomationRequest(req, res);
+      if (handled) return;
+    }
+    if ((req.url ?? "/").startsWith("/crm/segments")) {
+      const handled = await handleSegmentsRequest(req, res);
+      if (handled) return;
+    }
+    if ((req.url ?? "/").startsWith("/crm/")) {
+      const handled = await handleCrmRequest(req, res);
+      if (handled) return;
+    }
+    return await handleRequest(req, res);
+  } catch (error) {
+    console.error("Unhandled request error", error);
+    if (!res.headersSent) {
+      res.statusCode = 500;
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      res.end(JSON.stringify({ error: "internal_server_error" }));
+    } else if (!res.writableEnded) {
+      res.end();
+    }
   }
-  if ((req.url ?? "/").match(/^\/orders\/[^/]+\/status$/)) {
-    const handled = await handleOrderStatusRequest(req, res);
-    if (handled) return;
-  }
-  if ((req.url ?? "/").startsWith("/customers")) {
-    const handled = await handleCustomersRequest(req, res);
-    if (handled) return;
-  }
-  if ((req.url ?? "/").startsWith("/automations")) {
-    const handled = await handleAutomationRequest(req, res);
-    if (handled) return;
-  }
-  if ((req.url ?? "/").startsWith("/crm/segments")) {
-    const handled = await handleSegmentsRequest(req, res);
-    if (handled) return;
-  }
-  if ((req.url ?? "/").startsWith("/crm/")) {
-    const handled = await handleCrmRequest(req, res);
-    if (handled) return;
-  }
-  return handleRequest(req, res);
 });
+
+server.keepAliveTimeout = 5_000;
+server.headersTimeout = 15_000;
+server.requestTimeout = 30_000;
 
 server.listen(port, () => console.log(`CommerceOS API listening on :${port}`));
 
+let shuttingDown = false;
 const shutdown = async () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
   server.close();
+  const forceExit = setTimeout(() => process.exit(1), 10_000);
+  forceExit.unref();
   await prisma.$disconnect();
+  clearTimeout(forceExit);
 };
 
 process.on("SIGINT", shutdown);
