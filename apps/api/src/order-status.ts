@@ -76,6 +76,7 @@ export const handleOrderStatusRequest = async (req: IncomingMessage, res: Server
         }
       }
       const updated = await tx.order.updateMany({ where: { id: order.id, tenantId, status: currentStatus }, data: { status } }); if (updated.count !== 1) throw new Error("ORDER_STATE_CONFLICT");
+      if (order.customerId) await triggerOrderStatusChangedAutomation({ tenantId, customerId: order.customerId, orderId: order.id, orderNumber: order.orderNumber, from: currentStatus, to: status }, tx);
       if (order.customerId) await tx.customerEvent.create({ data: { tenantId, customerId: order.customerId, type: "ORDER_STATUS_CHANGED", data: { orderId: order.id, orderNumber: order.orderNumber, from: currentStatus, to: status } } });
       return { id: order.id, orderNumber: order.orderNumber, status, customerId: order.customerId, from: currentStatus };
     });
