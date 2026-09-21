@@ -1,40 +1,47 @@
+import { prisma } from "@commerceos/database";
 import { triggerAutomations } from "./automation-engine.js";
 
-export const triggerOrderPlacedAutomation = async (event: { tenantId: string; customerId: string; orderId: string; orderNumber: string; total: string; currency: string }) => {
-  await triggerAutomations({
-    tenantId: event.tenantId,
-    trigger: "ORDER_PLACED",
-    eventId: `order:${event.orderId}:placed`,
-    customerId: event.customerId,
-    data: { orderId: event.orderId, orderNumber: event.orderNumber, total: Number(event.total), currency: event.currency },
+type Event = {
+  tenantId: string;
+  trigger: "ORDER_PLACED" | "ORDER_STATUS_CHANGED" | "CUSTOMER_CREATED" | "INVENTORY_LOW";
+  eventId: string;
+  customerId?: string | null;
+  data: Record<string, unknown>;
+};
+
+export const enqueueAutomationEvent = async (event: Event): Promise<void> => {
+  await prisma.automationJob.upsert({
+    where: { eventId: event.eventId },
+    create: {
+      tenantId: event.tenantId,
+      trigger: event.trigger,
+      eventId: event.eventId,
+      customerId: event.customerId ?? null,
+      data: event.data,
+    },
+    update: {},
   });
+};
+
+export const triggerOrderPlacedAutomation = async (event: { tenantId: string; customerId: string; orderId: string; orderNumber: string; total: string; currency: string }) => {
+  await enqueueAutomationEvent({ tenantId: event.tenantId, trigger: "ORDER_PLACED", eventId: `order:${event.orderId}:placed`, customerId: event.customerId, data: { orderId: event.orderId, orderNumber: event.orderNumber, total: Number(event.total), currency: event.currency } });
 };
 
 export const triggerCustomerCreatedAutomation = async (event: { tenantId: string; customerId: string; email: string | null }) => {
-  await triggerAutomations({
-    tenantId: event.tenantId,
-    trigger: "CUSTOMER_CREATED",
-    eventId: `customer:${event.customerId}:created`,
-    customerId: event.customerId,
-    data: { customerId: event.customerId, email: event.email },
-  });
+  await enqueueAutomationEvent({ tenantId: event.tenantId, trigger: "CUSTOMER_CREATED", eventId: `customer:${event.customerId}:created`, customerId: event.customerId, data: { customerId: event.customerId, email: event.email } });
 };
 
 export const triggerOrderStatusChangedAutomation = async (event: { tenantId: string; customerId: string | null; orderId: string; orderNumber: string; from: string; to: string }) => {
-  await triggerAutomations({
-    tenantId: event.tenantId,
-    trigger: "ORDER_STATUS_CHANGED",
-    eventId: `order:${event.orderId}:status:${event.from}:${event.to}`,
-    customerId: event.customerId,
-    data: { orderId: event.orderId, orderNumber: event.orderNumber, from: event.from, to: event.to },
-  });
+  await enqueueAutomationEvent({ tenantId: event.tenantId, trigger: "ORDER_STATUS_CHANGED", eventId: `order:${event.orderId}:status:${event.from}:${event.to}`, customerId: event.customerId, data: { orderId: event.orderId, orderNumber: event.orderNumber, from: event.from, to: event.to } });
 };
 
 export const triggerInventoryLowAutomation = async (event: { tenantId: string; productId: string; variantId: string; stock: number; threshold: number; referenceId?: string | null }) => {
-  await triggerAutomations({
-    tenantId: event.tenantId,
-    trigger: "INVENTORY_LOW",
-    eventId: event.referenceId ? `inventory:${event.variantId}:low:${event.threshold}:${event.referenceId}` : undefined,
-    data: { productId: event.productId, variantId: event.variantId, stock: event.stock, threshold: event.threshold },
-  });
+  const eventId = `inventory:${event.variantId}:low:${event.threshold}:${event.referenceId ?? "threshold"}`;
+  await enqueueAutomationEvent({ tenantId: event.tenantId, trigger: "INVENTORY_LOW", eventId, data: { productId: event.productId, variantId: event.variantId, stock: event.stock, threshold: event.threshold } });
+};
+
+export const processAutomationJob = async (jobId: string): Promise<void> => {
+  const job = await prisma.automationJob.findUnique({ where: { id: jobId } });
+  if (!job) return;
+  await triggerAutomations({ tenantId: job.tenantId, trigger: job.trigger as Event["trigger"], eventId: job.eventId, customerId: job.customerId, data: job.data as Record<string, unknown> });
 };
