@@ -111,6 +111,7 @@ model Tenant {
   customerEvents CustomerEvent[]
   automations Automation[]
   automationExecutions AutomationExecution[]
+  automationJobs AutomationJob[]
   auditLogs AuditLog[]
 }
 
@@ -345,4 +346,24 @@ model InventoryMovement {
   @@index([tenantId, createdAt])
   @@index([variantId, createdAt])
   @@index([referenceId])
+}
+
+model AutomationJob {
+  id String @id @default(cuid())
+  tenantId String
+  trigger String
+  eventId String @unique
+  customerId String?
+  data Json
+  status String @default("QUEUED")
+  attempts Int @default(0)
+  availableAt DateTime @default(now())
+  lockedAt DateTime?
+  finishedAt DateTime?
+  lastError String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  @@index([status, availableAt])
+  @@index([tenantId, createdAt])
 }
