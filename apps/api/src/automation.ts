@@ -13,8 +13,10 @@ const json = (res: ServerResponse, status: number, data: unknown): void => {
 const respond = (res: ServerResponse, status: number, data: unknown): true => { json(res, status, data); return true; };
 const readBody = async (req: IncomingMessage): Promise<Record<string, unknown>> => {
   let raw = "";
-  for await (const chunk of req) raw += chunk;
-  if (raw.length > 100_000) throw new Error("PAYLOAD_TOO_LARGE");
+  for await (const chunk of req) {
+    raw += chunk;
+    if (Buffer.byteLength(raw, "utf8") > 100_000) throw new Error("PAYLOAD_TOO_LARGE");
+  }
   const value: unknown = raw ? JSON.parse(raw) : {};
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 };
@@ -25,6 +27,7 @@ type AutomationStatus = "DRAFT" | "ACTIVE" | "PAUSED";
 const triggers = new Set<AutomationTrigger>(["ORDER_PLACED", "ORDER_STATUS_CHANGED", "CUSTOMER_CREATED", "INVENTORY_LOW"]);
 const statuses = new Set<AutomationStatus>(["DRAFT", "ACTIVE", "PAUSED"]);
 const actionTypes = new Set(["ADD_CUSTOMER_TAG", "CREATE_CUSTOMER_NOTE", "SEND_WEBHOOK"]);
+const MAX_WEBHOOK_URL_LENGTH = 2048;
 
 const validConfig = (value: unknown): value is Record<string, unknown>[] => {
   if (!Array.isArray(value) || value.length < 1 || value.length > 10) return false;
@@ -32,14 +35,22 @@ const validConfig = (value: unknown): value is Record<string, unknown>[] => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return false;
     const action = item as Record<string, unknown>;
     if (typeof action.type !== "string" || !actionTypes.has(action.type)) return false;
-    if (action.type === "ADD_CUSTOMER_TAG") return typeof action.tagId === "string" && action.tagId.trim().length > 0;
+    if (action.type === "ADD_CUSTOMER_TAG") return typeof action.tagId === "string" && action.tagId.trim().length > 0 && action.tagId.trim().length <= 128;
     if (action.type === "CREATE_CUSTOMER_NOTE") return typeof action.note === "string" && action.note.trim().length > 0 && action.note.trim().length <= 2000;
-    if (action.type === "SEND_WEBHOOK") return typeof action.url === "string" && /^https:\/\//i.test(action.url);
+    if (action.type === "SEND_WEBHOOK") return typeof action.url === "string" && action.url.length <= MAX_WEBHOOK_URL_LENGTH && /^https:\/\//i.test(action.url);
     return false;
   });
 };
 
-const validConditions = (value: unknown): boolean => value == null || (typeof value === "object" && !Array.isArray(value));
+const validConditions = (value: unknown): boolean => {
+  if (value == null) return true;
+  if (typeof value !== "object" || Array.isArray(value)) return false;
+  try {
+    return JSON.stringify(value).length <= 50_000;
+  } catch {
+    return false;
+  }
+};
 
 export const handleAutomationRequest = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -57,6 +68,7 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
       const trigger = String(input.trigger ?? "") as AutomationTrigger;
       const status = input.status == null ? "DRAFT" : String(input.status) as AutomationStatus;
       if (!name || name.length > 120) return respond(res, 400, { error: "automation_name_required" });
+      if (description !== null && description.length > 2000) return respond(res, 400, { error: "automation_description_too_long" });
       if (!triggers.has(trigger)) return respond(res, 400, { error: "invalid_automation_trigger" });
       if (!statuses.has(status)) return respond(res, 400, { error: "invalid_automation_status" });
       if (!validConditions(input.conditions)) return respond(res, 400, { error: "invalid_automation_conditions" });
@@ -95,7 +107,7 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
       const input = await readBody(req);
       const data: Prisma.AutomationUpdateInput = {};
       if (input.name !== undefined) { const name = String(input.name).trim(); if (!name || name.length > 120) return respond(res, 400, { error: "automation_name_required" }); data.name = name; }
-      if (input.description !== undefined) data.description = input.description == null ? null : String(input.description).trim() || null;
+      if (input.description !== undefined) { const description = input.description == null ? null : String(input.description).trim() || null; if (description !== null && description.length > 2000) return respond(res, 400, { error: "automation_description_too_long" }); data.description = description; }
       if (input.status !== undefined) { const status = String(input.status) as AutomationStatus; if (!statuses.has(status)) return respond(res, 400, { error: "invalid_automation_status" }); data.status = status; }
       if (input.trigger !== undefined) { const trigger = String(input.trigger) as AutomationTrigger; if (!triggers.has(trigger)) return respond(res, 400, { error: "invalid_automation_trigger" }); data.trigger = trigger; }
       if (input.conditions !== undefined) { if (!validConditions(input.conditions)) return respond(res, 400, { error: "invalid_automation_conditions" }); data.conditions = input.conditions as Prisma.InputJsonValue; }
@@ -103,17 +115,16 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
       if (!Object.keys(data).length) return respond(res, 400, { error: "no_automation_fields" });
       try {
         const updated = await prisma.automation.update({ where: { id: existing.id }, data });
-        await audit(tenantId, context.auth!.userId, "AUTOMATION_UPDATED", "Automation", updated.id, req, {
-          fields: Object.keys(data),
-          status: updated.status,
-          trigger: updated.trigger,
-        });
+        await audit(tenantId, context.auth!.userId, "AUTOMATION_UPDATED", "Automation", updated.id, req, { fields: Object.keys(data), status: updated.status, trigger: updated.trigger });
         return respond(res, 200, updated);
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("Unique constraint")) return respond(res, 409, { error: "automation_already_exists" });
+        throw error;
       }
-      catch (error) { if (error instanceof Error && error.message.includes("Unique constraint")) return respond(res, 409, { error: "automation_already_exists" }); throw error; }
     }
     if (match && req.method === "DELETE") { requireRole(context, "OWNER", "ADMIN");
       const deleted = await prisma.automation.deleteMany({ where: { id: match[1], tenantId } });
+      if (deleted.count) await audit(tenantId, context.auth!.userId, "AUTOMATION_DELETED", "Automation", match[1], req);
       return deleted.count ? respond(res, 204, null) : respond(res, 404, { error: "automation_not_found" });
     }
 
