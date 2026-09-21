@@ -81,9 +81,6 @@ export const handleOrderStatusRequest = async (req: IncomingMessage, res: Server
       return { id: order.id, orderNumber: order.orderNumber, status, customerId: order.customerId, from: currentStatus };
     });
     if (result.from !== result.status) {
-      void triggerOrderStatusChangedAutomation({ tenantId, customerId: result.customerId, orderId: result.id, orderNumber: result.orderNumber, from: result.from, to: result.status }).catch(() => undefined);
-    }
-    if (result.from !== result.status) {
       await audit(tenantId, context.auth!.userId, "ORDER_STATUS_CHANGED", "Order", result.id, req, {
         orderNumber: result.orderNumber,
         from: result.from,
