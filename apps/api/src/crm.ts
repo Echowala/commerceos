@@ -30,13 +30,16 @@ export const handleCrmRequest = async (req: IncomingMessage, res: ServerResponse
       return json(res, 200, await prisma.customerTagAssignment.findMany({ where: { customerId: customer.id }, include: { tag: true }, orderBy: { createdAt: "asc" } })) as never;
     }
     if (customerTags && req.method === "POST") {
+      requireRole(context, "OWNER", "ADMIN");
       const customerId = customerTags[1]; const input = await body(req); const tagId = String(input.tagId ?? "").trim();
       const customer = await prisma.customer.findFirst({ where: { id: customerId, tenantId }, select: { id: true } }); if (!customer) return json(res, 404, { error: "customer_not_found" }) as never;
       const tag = await prisma.customerTag.findFirst({ where: { id: tagId, tenantId }, select: { id: true } }); if (!tag) return json(res, 404, { error: "tag_not_found" }) as never;
-      await prisma.customerTagAssignment.upsert({ where: { customerId_tagId: { customerId, tagId } }, create: { customerId, tagId }, update: {} });
-      return json(res, 201, { customerId, tagId }) as never;
+      const assignment = await prisma.customerTagAssignment.upsert({ where: { customerId_tagId: { customerId, tagId } }, create: { customerId, tagId }, update: {}, select: { customerId: true, tagId: true } });
+      await audit(tenantId, context.auth!.userId, "CRM_TAG_ASSIGNED", "Customer", customerId, req, { tagId });
+      return json(res, 201, assignment) as never;
     }
     if (customerTags && req.method === "DELETE") {
+      requireRole(context, "OWNER", "ADMIN");
       const customerId = customerTags[1]; const tagId = String(url.searchParams.get("tagId") ?? "").trim(); if (!tagId) return json(res, 400, { error: "tagId is required" }) as never;
       const customer = await prisma.customer.findFirst({ where: { id: customerId, tenantId }, select: { id: true } }); if (!customer) return json(res, 404, { error: "customer_not_found" }) as never;
       const deleted = await prisma.customerTagAssignment.deleteMany({ where: { customerId, tagId, tag: { tenantId } } });
@@ -51,6 +54,7 @@ export const handleCrmRequest = async (req: IncomingMessage, res: ServerResponse
       return json(res, 200, await prisma.customerEvent.findMany({ where: { customerId: customer.id, tenantId }, orderBy: { createdAt: "desc" }, take: limit })) as never;
     }
     if (customerEvents && req.method === "POST") {
+      requireRole(context, "OWNER", "ADMIN");
       const customerId = customerEvents[1]; const input = await body(req); const note = String(input.note ?? "").trim();
       if (!note || note.length > 2000) return json(res, 400, { error: "note_required" }) as never;
       const customer = await prisma.customer.findFirst({ where: { id: customerId, tenantId }, select: { id: true } }); if (!customer) return json(res, 404, { error: "customer_not_found" }) as never;
@@ -62,6 +66,7 @@ export const handleCrmRequest = async (req: IncomingMessage, res: ServerResponse
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message === "UNAUTHORIZED") return json(res, 401, { error: "unauthorized" }) as never;
+    if (message === "FORBIDDEN") return json(res, 403, { error: "forbidden" }) as never;
     if (message === "PAYLOAD_TOO_LARGE") return json(res, 413, { error: "payload_too_large" }) as never;
     return json(res, 500, { error: "internal_server_error" }) as never;
   }
