@@ -92,18 +92,16 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
         ...(customerCreated ? [{ tenantId: store.tenantId, customerId: customer.id, type: "CUSTOMER_CREATED" as const, data: { source: "public_checkout" } }] : []),
         { tenantId: store.tenantId, customerId: customer.id, type: "ORDER_PLACED" as const, data: { orderId: order.id, orderNumber: order.orderNumber, total: order.total.toString(), currency: order.currency } },
       ] });
+      if (customerCreated) {
+        await triggerCustomerCreatedAutomation({ tenantId: store.tenantId, customerId: customer.id, email }, tx);
+      }
+      await triggerOrderPlacedAutomation({ tenantId: store.tenantId, customerId: customer.id, orderId: order.id, orderNumber: order.orderNumber, total: order.total.toString(), currency: order.currency }, tx);
+      for (const item of movements.filter(movement => movement.crossedIntoLowStock)) {
+        await triggerInventoryLowAutomation({ tenantId: store.tenantId, productId: item.productId, variantId: item.variantId, stock: item.stockAfter, threshold: 5, referenceId: `${order.id}:${item.variantId}` }, tx);
+      }
       return { order, customerCreated, replayed: false, lowStockItems: movements.filter(movement => movement.crossedIntoLowStock) };
     });
 
-    if (!result.replayed) {
-      if (result.customerCreated) {
-        void triggerCustomerCreatedAutomation({ tenantId: store.tenantId, customerId: result.order.customerId!, email }).catch(() => undefined);
-      }
-      void triggerOrderPlacedAutomation({ tenantId: store.tenantId, customerId: result.order.customerId!, orderId: result.order.id, orderNumber: result.order.orderNumber, total: result.order.total.toString(), currency: result.order.currency }).catch(() => undefined);
-      for (const item of result.lowStockItems) {
-        void triggerInventoryLowAutomation({ tenantId: store.tenantId, productId: item.productId, variantId: item.variantId, stock: item.stockAfter, threshold: 5, referenceId: result.order.id }).catch(() => undefined);
-      }
-    }
     return { order: result.order, replayed: result.replayed };
   } catch (error) {
     if (idempotencyKey && error instanceof Error && error.message.includes("Order_storeId_idempotencyKey_key")) {
