@@ -132,10 +132,6 @@ export const triggerAutomations = async (event: AutomationEvent): Promise<void> 
     try {
       if (!matchesConditions(event.data, automation.conditions)) continue;
       const actions = Array.isArray(automation.actions) ? automation.actions as Action[] : [];
-      if (event.eventId) {
-        const existing = await prisma.automationExecution.findFirst({ where: { automationId: automation.id, triggerEventId: event.eventId }, select: { id: true } });
-        if (existing) continue;
-      }
       const databaseActions = actions.filter(action => action.type !== "SEND_WEBHOOK");
       const webhookActions = actions.filter(action => action.type === "SEND_WEBHOOK");
       if (webhookActions.some(action => !action.url || !/^https:\/\//i.test(action.url))) throw new Error("AUTOMATION_WEBHOOK_URL_INVALID");
