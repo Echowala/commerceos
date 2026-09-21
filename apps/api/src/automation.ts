@@ -23,11 +23,15 @@ const readBody = async (req: IncomingMessage): Promise<Record<string, unknown>> 
 
 type AutomationTrigger = "ORDER_PLACED" | "ORDER_STATUS_CHANGED" | "CUSTOMER_CREATED" | "INVENTORY_LOW";
 type AutomationStatus = "DRAFT" | "ACTIVE" | "PAUSED";
+type ConditionOperator = "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "contains";
 
 const triggers = new Set<AutomationTrigger>(["ORDER_PLACED", "ORDER_STATUS_CHANGED", "CUSTOMER_CREATED", "INVENTORY_LOW"]);
 const statuses = new Set<AutomationStatus>(["DRAFT", "ACTIVE", "PAUSED"]);
+const conditionOperators = new Set<ConditionOperator>(["eq", "neq", "gt", "gte", "lt", "lte", "contains"]);
 const actionTypes = new Set(["ADD_CUSTOMER_TAG", "CREATE_CUSTOMER_NOTE", "SEND_WEBHOOK"]);
 const MAX_WEBHOOK_URL_LENGTH = 2048;
+const MAX_CONDITIONS_PER_GROUP = 25;
+const MAX_CONDITION_FIELD_LENGTH = 200;
 
 const validConfig = (value: unknown): value is Record<string, unknown>[] => {
   if (!Array.isArray(value) || value.length < 1 || value.length > 10) return false;
@@ -42,11 +46,33 @@ const validConfig = (value: unknown): value is Record<string, unknown>[] => {
   });
 };
 
+const validCondition = (value: unknown): boolean => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const condition = value as Record<string, unknown>;
+  if (typeof condition.field !== "string" || condition.field.trim().length === 0 || condition.field.length > MAX_CONDITION_FIELD_LENGTH) return false;
+  if (typeof condition.operator !== "string" || !conditionOperators.has(condition.operator as ConditionOperator)) return false;
+  if (!Object.prototype.hasOwnProperty.call(condition, "value")) return false;
+  try {
+    return JSON.stringify(condition.value).length <= 5_000;
+  } catch {
+    return false;
+  }
+};
+
 const validConditions = (value: unknown): boolean => {
   if (value == null) return true;
   if (typeof value !== "object" || Array.isArray(value)) return false;
+  const root = value as Record<string, unknown>;
+  for (const key of Object.keys(root)) {
+    if (key !== "all" && key !== "any") return false;
+  }
+  for (const key of ["all", "any"]) {
+    if (root[key] === undefined) continue;
+    if (!Array.isArray(root[key]) || root[key].length > MAX_CONDITIONS_PER_GROUP || !root[key].every(validCondition)) return false;
+  }
+  if (!Array.isArray(root.all) && !Array.isArray(root.any)) return false;
   try {
-    return JSON.stringify(value).length <= 50_000;
+    return JSON.stringify(root).length <= 50_000;
   } catch {
     return false;
   }
