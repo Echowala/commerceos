@@ -31,16 +31,27 @@ export const audit = async (
   req: IncomingMessage,
   metadata?: Record<string, unknown>
 ): Promise<void> => {
-  await prisma.auditLog.create({
-    data: {
-      tenantId,
-      userId,
+  try {
+    await prisma.auditLog.create({
+      data: {
+        tenantId,
+        userId,
+        action,
+        resource,
+        resourceId,
+        metadata: sanitizeMetadata(metadata),
+        ipAddress: requestIp(req),
+        userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"].slice(0, 512) : null,
+      },
+    });
+  } catch (error) {
+    // Audit persistence must not turn a committed business mutation into a
+    // misleading 500 response that callers may retry and duplicate.
+    console.error("Audit log persistence failed", {
       action,
       resource,
       resourceId,
-      metadata: sanitizeMetadata(metadata),
-      ipAddress: requestIp(req),
-      userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"].slice(0, 512) : null,
-    },
-  });
+      error: error instanceof Error ? error.message : "unknown_error",
+    });
+  }
 };
