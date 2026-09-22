@@ -17,7 +17,7 @@ export const enqueueAutomationEvent = async (event: Event, db: Prisma.Transactio
       trigger: event.trigger,
       eventId: event.eventId,
       customerId: event.customerId ?? null,
-      data: event.data,
+      data: event.data as Prisma.InputJsonValue,
     },
     update: {},
   });
