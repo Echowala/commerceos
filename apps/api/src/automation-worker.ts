@@ -32,7 +32,7 @@ const processOne = async (): Promise<void> => {
   const startHeartbeat = () => {
     heartbeat = setInterval(() => {
       void prisma.automationJob.updateMany({
-        where: { id: job.id, status: "RUNNING", lockedAt: claimedAt },
+        where: { id: job.id, status: "RUNNING", lockedAt: { gte: claimedAt } },
         data: { lockedAt: new Date() },
       }).catch(error => console.error("Automation job heartbeat error", error));
     }, HEARTBEAT_MS);
@@ -59,14 +59,14 @@ const processOne = async (): Promise<void> => {
     if (failedExecutions > 0 && job.attempts < MAX_ATTEMPTS) {
       const delay = Math.min(60_000, 2 ** job.attempts * 1000);
       await prisma.automationJob.updateMany({
-        where: { id: job.id, status: "RUNNING" },
+        where: { id: job.id, status: "RUNNING", lockedAt: { gte: claimedAt } },
         data: { status: "QUEUED", lockedAt: null, availableAt: new Date(Date.now() + delay), lastError: `automation execution failed (${failedExecutions})` },
       });
       return;
     }
 
     await prisma.automationJob.updateMany({
-      where: { id: job.id, status: "RUNNING" },
+      where: { id: job.id, status: "RUNNING", lockedAt: { gte: claimedAt } },
       data: { status: failedExecutions > 0 ? "FAILED" : "SUCCEEDED", lockedAt: null, finishedAt: new Date(), lastError: failedExecutions > 0 ? `automation execution failed (${failedExecutions})` : null },
     });
   } catch (error) {
@@ -74,12 +74,12 @@ const processOne = async (): Promise<void> => {
     if (job.attempts < MAX_ATTEMPTS) {
       const delay = Math.min(60_000, 2 ** job.attempts * 1000);
       await prisma.automationJob.updateMany({
-        where: { id: job.id, status: "RUNNING" },
+        where: { id: job.id, status: "RUNNING", lockedAt: { gte: claimedAt } },
         data: { status: "QUEUED", lockedAt: null, availableAt: new Date(Date.now() + delay), lastError: message },
       });
     } else {
       await prisma.automationJob.updateMany({
-        where: { id: job.id, status: "RUNNING" },
+        where: { id: job.id, status: "RUNNING", lockedAt: { gte: claimedAt } },
         data: { status: "FAILED", lockedAt: null, finishedAt: new Date(), lastError: message },
       });
     }
