@@ -4,6 +4,8 @@ import { createClient, type RedisClientType } from "redis";
 const WINDOW_MS = 60_000;
 const MAX_REQUESTS = 120;
 const PUBLIC_CHECKOUT_MAX = 20;
+const MAX_MEMORY_BUCKETS = 50_000;
+const MAX_CLIENT_KEY_LENGTH = 128;
 
 type Bucket = { count: number; resetAt: number };
 const buckets = new Map<string, Bucket>();
@@ -12,7 +14,10 @@ let redisConnectPromise: Promise<void> | null = null;
 
 const getClientKey = (req: IncomingMessage) => {
   const forwarded = process.env.TRUSTED_PROXY === "true" ? req.headers["x-forwarded-for"] : undefined;
-  return typeof forwarded === "string" && forwarded.trim() ? forwarded.split(",")[0].trim() : req.socket.remoteAddress ?? "unknown";
+  const value = typeof forwarded === "string" && forwarded.trim()
+    ? forwarded.split(",")[0].trim()
+    : req.socket.remoteAddress ?? "unknown";
+  return value.slice(0, MAX_CLIENT_KEY_LENGTH);
 };
 
 const getRedis = async () => {
@@ -42,6 +47,10 @@ const consumeRedis = async (key: string, limit: number, now: number) => {
 const consumeMemory = (key: string, limit: number, now = Date.now()) => {
   const existing = buckets.get(key);
   if (!existing || existing.resetAt <= now) {
+    if (!existing && buckets.size >= MAX_MEMORY_BUCKETS) {
+      const oldestKey = buckets.keys().next().value;
+      if (oldestKey !== undefined) buckets.delete(oldestKey);
+    }
     buckets.set(key, { count: 1, resetAt: now + WINDOW_MS });
     return { allowed: true, remaining: limit - 1, resetAt: now + WINDOW_MS };
   }
