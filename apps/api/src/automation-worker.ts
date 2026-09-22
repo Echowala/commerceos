@@ -3,6 +3,7 @@ import { triggerAutomations } from "./automation-engine.js";
 
 const POLL_MS = 1000;
 const STALE_MS = 15 * 60 * 1000;
+const HEARTBEAT_MS = 60 * 1000;
 const MAX_ATTEMPTS = 5;
 
 let running = false;
@@ -20,13 +21,29 @@ const processOne = async (): Promise<void> => {
   });
   if (!job) return;
 
+  const claimedAt = new Date();
   const claimed = await prisma.automationJob.updateMany({
     where: { id: job.id, status: "QUEUED" },
-    data: { status: "RUNNING", lockedAt: new Date(), attempts: { increment: 1 } },
+    data: { status: "RUNNING", lockedAt: claimedAt, attempts: { increment: 1 } },
   });
   if (claimed.count !== 1) return;
 
+  let heartbeat: NodeJS.Timeout | undefined;
+  const startHeartbeat = () => {
+    heartbeat = setInterval(() => {
+      void prisma.automationJob.updateMany({
+        where: { id: job.id, status: "RUNNING", lockedAt: claimedAt },
+        data: { lockedAt: new Date() },
+      }).catch(error => console.error("Automation job heartbeat error", error));
+    }, HEARTBEAT_MS);
+    heartbeat.unref();
+  };
+  const stopHeartbeat = () => {
+    if (heartbeat) clearInterval(heartbeat);
+  };
+
   try {
+    startHeartbeat();
     await triggerAutomations({
       tenantId: job.tenantId,
       trigger: job.trigger as "ORDER_PLACED" | "ORDER_STATUS_CHANGED" | "CUSTOMER_CREATED" | "INVENTORY_LOW",
@@ -56,10 +73,18 @@ const processOne = async (): Promise<void> => {
     const message = error instanceof Error ? error.message : "automation_job_failed";
     if (job.attempts < MAX_ATTEMPTS) {
       const delay = Math.min(60_000, 2 ** job.attempts * 1000);
-      await prisma.automationJob.updateMany({ where: { id: job.id, status: "RUNNING" }, data: { status: "QUEUED", lockedAt: null, availableAt: new Date(Date.now() + delay), lastError: message } });
+      await prisma.automationJob.updateMany({
+        where: { id: job.id, status: "RUNNING" },
+        data: { status: "QUEUED", lockedAt: null, availableAt: new Date(Date.now() + delay), lastError: message },
+      });
     } else {
-      await prisma.automationJob.updateMany({ where: { id: job.id, status: "RUNNING" }, data: { status: "FAILED", lockedAt: null, finishedAt: new Date(), lastError: message } });
+      await prisma.automationJob.updateMany({
+        where: { id: job.id, status: "RUNNING" },
+        data: { status: "FAILED", lockedAt: null, finishedAt: new Date(), lastError: message },
+      });
     }
+  } finally {
+    stopHeartbeat();
   }
 };
 
