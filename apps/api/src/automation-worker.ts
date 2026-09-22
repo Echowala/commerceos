@@ -94,15 +94,29 @@ const processOne = async (): Promise<void> => {
   }
 };
 
-export const startAutomationWorker = (): (() => void) => {
-  if (running) return () => undefined;
+export const startAutomationWorker = (): (() => Promise<void>) => {
+  if (running) return async () => undefined;
   running = true;
   let stopped = false;
+  let active: Promise<void> | null = null;
+  let resolveStopped: (() => void) | null = null;
+  const stoppedPromise = new Promise<void>(resolve => { resolveStopped = resolve; });
+
   const tick = async () => {
     if (stopped) return;
-    try { await processOne(); } catch (error) { console.error("Automation worker error", error); }
+    active = processOne();
+    try { await active; } catch (error) { console.error("Automation worker error", error); }
+    active = null;
     if (!stopped) setTimeout(tick, POLL_MS).unref();
+    else resolveStopped?.();
   };
+
   void tick();
-  return () => { stopped = true; running = false; };
+  return async () => {
+    if (stopped) { await stoppedPromise; return; }
+    stopped = true;
+    running = false;
+    if (active) await active;
+    resolveStopped?.();
+  };
 };
