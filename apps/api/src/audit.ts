@@ -1,14 +1,15 @@
 import type { IncomingMessage } from "node:http";
 import { prisma } from "@commerceos/database";
+import type { Prisma } from "@prisma/client";
 
 const MAX_METADATA_BYTES = 20_000;
 
-const sanitizeMetadata = (metadata?: Record<string, unknown>): Record<string, unknown> | undefined => {
+const sanitizeMetadata = (metadata?: Record<string, unknown>): Prisma.InputJsonValue | undefined => {
   if (!metadata) return undefined;
   try {
     const serialized = JSON.stringify(metadata);
     if (serialized.length > MAX_METADATA_BYTES) return { truncated: true };
-    return JSON.parse(serialized) as Record<string, unknown>;
+    return JSON.parse(serialized) as Prisma.InputJsonValue;
   } catch {
     return { invalid: true };
   }
@@ -45,8 +46,6 @@ export const audit = async (
       },
     });
   } catch (error) {
-    // Audit persistence must not turn a committed business mutation into a
-    // misleading 500 response that callers may retry and duplicate.
     console.error("Audit log persistence failed", {
       action,
       resource,
