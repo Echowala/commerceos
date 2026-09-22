@@ -21,25 +21,31 @@ const processOne = async (): Promise<void> => {
   });
   if (!job) return;
 
-  const claimedAt = new Date();
+  let lockAt = new Date();
   const claimed = await prisma.automationJob.updateMany({
     where: { id: job.id, status: "QUEUED" },
-    data: { status: "RUNNING", lockedAt: claimedAt, attempts: { increment: 1 } },
+    data: { status: "RUNNING", lockedAt: lockAt, attempts: { increment: 1 } },
   });
   if (claimed.count !== 1) return;
 
   let heartbeat: NodeJS.Timeout | undefined;
   const startHeartbeat = () => {
     heartbeat = setInterval(() => {
-      void prisma.automationJob.updateMany({
-        where: { id: job.id, status: "RUNNING", lockedAt: { gte: claimedAt } },
-        data: { lockedAt: new Date() },
-      }).catch(error => console.error("Automation job heartbeat error", error));
+      void (async () => {
+        const nextLockAt = new Date();
+        const refreshed = await prisma.automationJob.updateMany({
+          where: { id: job.id, status: "RUNNING", lockedAt: lockAt },
+          data: { lockedAt: nextLockAt },
+        });
+        if (refreshed.count === 1) lockAt = nextLockAt;
+        else stopHeartbeat();
+      })().catch(error => console.error("Automation job heartbeat error", error));
     }, HEARTBEAT_MS);
     heartbeat.unref();
   };
   const stopHeartbeat = () => {
     if (heartbeat) clearInterval(heartbeat);
+    heartbeat = undefined;
   };
 
   try {
@@ -59,14 +65,14 @@ const processOne = async (): Promise<void> => {
     if (failedExecutions > 0 && job.attempts < MAX_ATTEMPTS) {
       const delay = Math.min(60_000, 2 ** job.attempts * 1000);
       await prisma.automationJob.updateMany({
-        where: { id: job.id, status: "RUNNING", lockedAt: { gte: claimedAt } },
+        where: { id: job.id, status: "RUNNING", lockedAt: lockAt },
         data: { status: "QUEUED", lockedAt: null, availableAt: new Date(Date.now() + delay), lastError: `automation execution failed (${failedExecutions})` },
       });
       return;
     }
 
     await prisma.automationJob.updateMany({
-      where: { id: job.id, status: "RUNNING", lockedAt: { gte: claimedAt } },
+      where: { id: job.id, status: "RUNNING", lockedAt: lockAt },
       data: { status: failedExecutions > 0 ? "FAILED" : "SUCCEEDED", lockedAt: null, finishedAt: new Date(), lastError: failedExecutions > 0 ? `automation execution failed (${failedExecutions})` : null },
     });
   } catch (error) {
@@ -74,12 +80,12 @@ const processOne = async (): Promise<void> => {
     if (job.attempts < MAX_ATTEMPTS) {
       const delay = Math.min(60_000, 2 ** job.attempts * 1000);
       await prisma.automationJob.updateMany({
-        where: { id: job.id, status: "RUNNING", lockedAt: { gte: claimedAt } },
+        where: { id: job.id, status: "RUNNING", lockedAt: lockAt },
         data: { status: "QUEUED", lockedAt: null, availableAt: new Date(Date.now() + delay), lastError: message },
       });
     } else {
       await prisma.automationJob.updateMany({
-        where: { id: job.id, status: "RUNNING", lockedAt: { gte: claimedAt } },
+        where: { id: job.id, status: "RUNNING", lockedAt: lockAt },
         data: { status: "FAILED", lockedAt: null, finishedAt: new Date(), lastError: message },
       });
     }
