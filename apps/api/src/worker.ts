@@ -4,8 +4,11 @@ import { startAutomationWorker } from "./automation-worker.js";
 const stop = startAutomationWorker();
 console.log("CommerceOS automation worker started");
 
+let shuttingDown = false;
 const shutdown = async () => {
-  stop();
+  if (shuttingDown) return;
+  shuttingDown = true;
+  await stop();
   await prisma.$disconnect();
 };
 
