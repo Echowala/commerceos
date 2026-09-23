@@ -25,7 +25,7 @@ const readBody = async (req: IncomingMessage): Promise<Record<string, unknown>> 
 
 type Rule = { field: "orderCount" | "totalSpend" | "lastOrderDaysAgo" | "tag"; operator: "gte" | "lte" | "eq" | "neq" | "gt" | "lt"; value: string | number };
 type SegmentRules = { match: "all" | "any"; rules: Rule[] };
-type CustomerForSegment = { id: string; orders: { total: unknown; status: string; createdAt: Date }[]; tags: { tag: { name: string } }[] };
+type CustomerForSegment = { id: string; orderCount: number; totalSpend: number; lastOrder: Date | null; tags: { tag: { name: string } }[] };
 
 const validField = (value: unknown): value is Rule["field"] => value === "orderCount" || value === "totalSpend" || value === "lastOrderDaysAgo" || value === "tag";
 const validOperator = (value: unknown): value is Rule["operator"] => value === "gte" || value === "lte" || value === "eq" || value === "neq" || value === "gt" || value === "lt";
@@ -46,9 +46,8 @@ const validRules = (value: unknown): value is SegmentRules => {
 };
 
 const matches = (rules: SegmentRules, customer: CustomerForSegment): boolean => {
-  const validOrders = customer.orders.filter((order): boolean => order.status !== "CANCELLED" && order.status !== "REFUNDED");
-  const spend = validOrders.reduce((sum, order) => sum + Number(order.total), 0);
-  const lastOrder = customer.orders[0]?.createdAt ?? null;
+  const spend = customer.totalSpend;
+  const lastOrder = customer.lastOrder;
   const lastOrderDaysAgo = lastOrder ? Math.max(0, (Date.now() - lastOrder.getTime()) / 86_400_000) : null;
   const evaluate = (rule: Rule): boolean => {
     if (rule.field === "tag") {
@@ -77,8 +76,11 @@ export const handleSegmentsRequest = async (req: IncomingMessage, res: ServerRes
     const context = await getRequestContext(req.headers); const tenantId = requireTenant(context);
     if (url.pathname === "/crm/segments" && req.method === "GET") {
       const segments = await prisma.customerSegment.findMany({ where: { tenantId }, orderBy: { name: "asc" } });
-      const customers = await prisma.customer.findMany({ where: { tenantId }, select: { id: true, orders: { select: { total: true, status: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 100 }, tags: { select: { tag: { select: { name: true } } } } } });
-      return respond(res, 200, segments.map(segment => { const rules = parseRules(segment.rules); return { ...segment, customerCount: rules ? customers.filter(customer => matches(rules, customer)).length : 0 }; }));
+      const customers = await prisma.customer.findMany({ where: { tenantId }, select: { id: true, tags: { select: { tag: { select: { name: true } } } } } });
+      const orderMetrics = await prisma.order.groupBy({ by: ["customerId"], where: { tenantId, customerId: { not: null }, status: { notIn: ["CANCELLED", "REFUNDED"] } }, _count: { _all: true }, _sum: { total: true }, _max: { createdAt: true } });
+      const metrics = new Map(orderMetrics.filter(metric => metric.customerId).map(metric => [metric.customerId as string, { orderCount: metric._count._all, totalSpend: Number(metric._sum.total ?? 0), lastOrder: metric._max.createdAt }]));
+      const segmentCustomers: CustomerForSegment[] = customers.map(customer => ({ id: customer.id, orderCount: metrics.get(customer.id)?.orderCount ?? 0, totalSpend: metrics.get(customer.id)?.totalSpend ?? 0, lastOrder: metrics.get(customer.id)?.lastOrder ?? null, tags: customer.tags }));
+      return respond(res, 200, segments.map(segment => { const rules = parseRules(segment.rules); return { ...segment, customerCount: rules ? segmentCustomers.filter(customer => matches(rules, customer)).length : 0 }; }));
     }
     if (url.pathname === "/crm/segments" && req.method === "POST") { requireRole(context, "OWNER", "ADMIN");
       const input = await readBody(req);
@@ -104,8 +106,10 @@ export const handleSegmentsRequest = async (req: IncomingMessage, res: ServerRes
       if (!segment) return respond(res, 404, { error: "segment_not_found" });
       const rules = parseRules(segment.rules);
       if (!rules) return respond(res, 500, { error: "invalid_segment_rules" });
-      const customers = await prisma.customer.findMany({ where: { tenantId }, orderBy: { createdAt: "desc" }, select: { id: true, email: true, phone: true, firstName: true, lastName: true, orders: { select: { total: true, status: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 100 }, tags: { select: { tag: { select: { name: true } } } } } });
-      const result = customers.filter(customer => matches(rules, customer)).map(customer => { const validOrders = customer.orders.filter(order => order.status !== "CANCELLED" && order.status !== "REFUNDED"); return { id: customer.id, email: customer.email, phone: customer.phone, firstName: customer.firstName, lastName: customer.lastName, orderCount: validOrders.length, totalSpend: validOrders.reduce((sum, order) => sum + Number(order.total), 0).toFixed(2), lastOrderAt: customer.orders[0]?.createdAt?.toISOString() ?? null, tags: customer.tags.map(({ tag }) => tag.name) }; });
+      const customers = await prisma.customer.findMany({ where: { tenantId }, orderBy: { createdAt: "desc" }, select: { id: true, email: true, phone: true, firstName: true, lastName: true, tags: { select: { tag: { select: { name: true } } } } } });
+      const orderMetrics = await prisma.order.groupBy({ by: ["customerId"], where: { tenantId, customerId: { not: null }, status: { notIn: ["CANCELLED", "REFUNDED"] } }, _count: { _all: true }, _sum: { total: true }, _max: { createdAt: true } });
+      const metrics = new Map(orderMetrics.filter(metric => metric.customerId).map(metric => [metric.customerId as string, { orderCount: metric._count._all, totalSpend: Number(metric._sum.total ?? 0), lastOrder: metric._max.createdAt }]));
+      const result = customers.map(customer => ({ customer, metric: metrics.get(customer.id) ?? { orderCount: 0, totalSpend: 0, lastOrder: null } })).filter(({ customer, metric }) => matches(rules, { id: customer.id, ...metric, tags: customer.tags })).map(({ customer, metric }) => ({ id: customer.id, email: customer.email, phone: customer.phone, firstName: customer.firstName, lastName: customer.lastName, orderCount: metric.orderCount, totalSpend: metric.totalSpend.toFixed(2), lastOrderAt: metric.lastOrder?.toISOString() ?? null, tags: customer.tags.map(({ tag }) => tag.name) }));
       return respond(res, 200, result);
     }
     return respond(res, 404, { error: "segment_route_not_found" });
