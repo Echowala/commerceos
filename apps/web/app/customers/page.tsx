@@ -9,6 +9,7 @@ type Tag = { id: string; name: string; color?: string | null; _count?: { custome
 type Assignment = { tag: Tag };
 type Event = { id: string; type: string; data?: { note?: string; orderNumber?: string; from?: string; to?: string } | null; createdAt: string };
 type ProfileForm = { firstName: string; lastName: string; email: string; phone: string };
+type CustomerListResponse = { items: Customer[]; total: number; page: number; pageSize: number; totalPages: number };
 
 const customerName = (customer: Customer) => [customer.firstName, customer.lastName].filter(Boolean).join(" ") || "Unnamed customer";
 const money = (value: string, currency = "PKR") => `${currency} ${Number(value).toFixed(2)}`;
@@ -28,9 +29,12 @@ export default function CustomersPage() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const pageSize = 25;
 
-  const load = async () => { try { const [customerList, tagList] = await Promise.all([api<Customer[]>("/customers"), api<Tag[]>("/crm/tags")]); setCustomers(customerList); setTags(tagList); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "Unable to load customers"); } finally { setLoading(false); } };
-  useEffect(() => { void load(); }, []);
+  const load = async (targetPage = page) => { try { const [customerList, tagList] = await Promise.all([api<CustomerListResponse>(`/customers?page=${targetPage}&pageSize=${pageSize}`), api<Tag[]>("/crm/tags")]); setCustomers(customerList.items); setPage(customerList.page); setTotalPages(customerList.totalPages); setTags(tagList); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "Unable to load customers"); } finally { setLoading(false); } };
+  useEffect(() => { void load(page); }, [page]);
   const openCustomer = async (id: string) => { try { const [detail, customerTags, customerEvents] = await Promise.all([api<CustomerDetail>(`/customers/${id}`), api<Assignment[]>(`/crm/customers/${id}/tags`), api<Event[]>(`/crm/customers/${id}/events`)]); setSelected(detail); setProfile({ firstName: detail.firstName ?? "", lastName: detail.lastName ?? "", email: detail.email ?? "", phone: detail.phone ?? "" }); setAssignedTags(customerTags); setEvents(customerEvents); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "Unable to load customer"); } };
   const saveProfile = async () => { if (!selected) return; setSavingProfile(true); try { const updated = await api<Customer>(`/customers/${selected.id}`, { method: "PATCH", body: JSON.stringify(profile) }); setSelected(current => current ? { ...current, ...updated } : current); setCustomers(current => current.map(customer => customer.id === updated.id ? { ...customer, ...updated } : customer)); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "Unable to save customer"); } finally { setSavingProfile(false); } };
   const createTag = async () => { const name = tagName.trim(); if (!name || creatingTag) return; setCreatingTag(true); try { const created = await api<Tag>("/crm/tags", { method: "POST", body: JSON.stringify({ name, color: tagColor.trim() || undefined }) }); setTags(current => [...current, created].sort((a, b) => a.name.localeCompare(b.name))); setTagName(""); setTagColor(""); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "Unable to create tag"); } finally { setCreatingTag(false); } };
@@ -41,7 +45,10 @@ export default function CustomersPage() {
   return <main className="main workspace-page">
     <header className="header"><div><h1 className="title">Customers</h1><div className="muted">Customer 360: identity, orders, spend and CRM activity.</div></div><a className="back-link" href="/">Dashboard</a></header>
     <section className="section">
-      {loading ? <p className="muted">Loading customers...</p> : error && !selected ? <p className="error">{error}</p> : customers.length === 0 ? <p className="muted">No customers yet. They will appear here after their first order.</p> : <div className="table-wrap"><table><thead><tr><th>Customer</th><th>Contact</th><th>Orders</th><th>Lifetime spend</th><th>Last order</th></tr></thead><tbody>{customers.map(c => <tr key={c.id} className="clickable-row" onClick={() => void openCustomer(c.id)}><td><strong>{customerName(c)}</strong></td><td>{c.email || c.phone || "—"}</td><td>{c.orderCount}</td><td>{money(c.totalSpend)}</td><td>{c.lastOrderAt ? new Date(c.lastOrderAt).toLocaleDateString() : "—"}</td></tr>)}</tbody></table></div>}
+      {loading ? <p className="muted">Loading customers...</p> : error && !selected ? <p className="error">{error}</p> : customers.length === 0 ? <p className="muted">No customers yet. They will appear here after their first order.</p> : <>
+        <div className="table-wrap"><table><thead><tr><th>Customer</th><th>Contact</th><th>Orders</th><th>Lifetime spend</th><th>Last order</th></tr></thead><tbody>{customers.map(c => <tr key={c.id} className="clickable-row" onClick={() => void openCustomer(c.id)}><td><strong>{customerName(c)}</strong></td><td>{c.email || c.phone || "—"}</td><td>{c.orderCount}</td><td>{money(c.totalSpend)}</td><td>{c.lastOrderAt ? new Date(c.lastOrderAt).toLocaleDateString() : "—"}</td></tr>)}</tbody></table></div>
+        {totalPages > 1 && <div className="detail-header"><span className="muted">Page {page} of {totalPages}</span><div className="tag-list"><button className="secondary-button" onClick={() => setPage(current => Math.max(1, current - 1))} disabled={page === 1}>Previous</button><button className="secondary-button" onClick={() => setPage(current => Math.min(totalPages, current + 1))} disabled={page === totalPages}>Next</button></div></div>}
+      </>}
     </section>
     {selected && <section className="section detail-card">
       <div className="detail-header"><div><h2>{customerName(selected)}</h2><div className="muted">{selected.email || selected.phone || "No contact details"}</div></div><button className="secondary-button" onClick={() => setSelected(null)}>Close</button></div>
