@@ -38,7 +38,14 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
     const tenantId = requireTenant(context);
 
     if (url.pathname === "/customers" && req.method === "GET") {
-      const customers = await prisma.customer.findMany({ where: { tenantId }, orderBy: { createdAt: "desc" }, select: { id: true, email: true, phone: true, firstName: true, lastName: true, createdAt: true, updatedAt: true } });
+      const requestedPage = Number(url.searchParams.get("page") ?? "1");
+      const requestedPageSize = Number(url.searchParams.get("pageSize") ?? "25");
+      const page = Number.isInteger(requestedPage) ? Math.max(1, Math.min(requestedPage, 10_000)) : 1;
+      const pageSize = Number.isInteger(requestedPageSize) ? Math.max(1, Math.min(requestedPageSize, 100)) : 25;
+      const [total, customers] = await Promise.all([
+        prisma.customer.count({ where: { tenantId } }),
+        prisma.customer.findMany({ where: { tenantId }, orderBy: { createdAt: "desc" }, skip: (page - 1) * pageSize, take: pageSize, select: { id: true, email: true, phone: true, firstName: true, lastName: true, createdAt: true, updatedAt: true } })
+      ]);
       const customerIds = customers.map(customer => customer.id);
       const orders = customerIds.length === 0 ? [] : await prisma.order.findMany({ where: { tenantId, customerId: { in: customerIds } }, select: { customerId: true, total: true, createdAt: true, status: true }, orderBy: { createdAt: "desc" } });
       const metrics = new Map<string, { orderCount: number; totalSpend: number; lastOrderAt: Date | null }>();
@@ -50,10 +57,16 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
         if (!current.lastOrderAt || order.createdAt > current.lastOrderAt) current.lastOrderAt = order.createdAt;
         metrics.set(order.customerId, current);
       }
-      return respond(res, 200, customers.map(customer => {
-        const metric = metrics.get(customer.id) ?? { orderCount: 0, totalSpend: 0, lastOrderAt: null };
-        return { ...customer, orderCount: metric.orderCount, totalSpend: money(metric.totalSpend), lastOrderAt: metric.lastOrderAt?.toISOString() ?? null };
-      }));
+      return respond(res, 200, {
+        items: customers.map(customer => {
+          const metric = metrics.get(customer.id) ?? { orderCount: 0, totalSpend: 0, lastOrderAt: null };
+          return { ...customer, orderCount: metric.orderCount, totalSpend: money(metric.totalSpend), lastOrderAt: metric.lastOrderAt?.toISOString() ?? null };
+        }),
+        total,
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize)
+      });
     }
 
     const match = url.pathname.match(/^\/customers\/([^/]+)$/);
