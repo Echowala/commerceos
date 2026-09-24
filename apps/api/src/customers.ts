@@ -108,10 +108,22 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
     }
 
     if (match && req.method === "GET") {
-      const customer = await prisma.customer.findFirst({ where: { id: match[1], tenantId }, select: { id: true, email: true, phone: true, firstName: true, lastName: true, createdAt: true, updatedAt: true, orders: { where: { tenantId }, orderBy: { createdAt: "desc" }, select: { id: true, orderNumber: true, status: true, paymentStatus: true, total: true, currency: true, createdAt: true, store: { select: { id: true, name: true } }, items: { select: { id: true, name: true, quantity: true, unitPrice: true, total: true }, orderBy: { name: "asc" } } } } } });
+      const requestedOrderPage = Number(url.searchParams.get("orderPage") ?? "1");
+      const requestedOrderPageSize = Number(url.searchParams.get("orderPageSize") ?? "25");
+      const hasOrderPagination = url.searchParams.has("orderPage") || url.searchParams.has("orderPageSize");
+      const orderPage = Number.isInteger(requestedOrderPage) ? Math.max(1, Math.min(requestedOrderPage, 10_000)) : 1;
+      const orderPageSize = Number.isInteger(requestedOrderPageSize) ? Math.max(1, Math.min(requestedOrderPageSize, 100)) : 25;
+      const customer = await prisma.customer.findFirst({ where: { id: match[1], tenantId }, select: { id: true, email: true, phone: true, firstName: true, lastName: true, createdAt: true, updatedAt: true } });
       if (!customer) return respond(res, 404, { error: "customer_not_found" });
-      const includedOrders = customer.orders.filter(order => !isExcludedSpendStatus(String(order.status)));
-      const totalSpend = includedOrders.reduce((sum, order) => sum + Number(order.total), 0);
+      const orderWhere = { tenantId, customerId: customer.id };
+      const [orders, orderTotal] = await Promise.all([
+        prisma.order.findMany({ where: orderWhere, orderBy: { createdAt: "desc" }, ...(hasOrderPagination ? { skip: (orderPage - 1) * orderPageSize, take: orderPageSize } : {}), select: { id: true, orderNumber: true, status: true, paymentStatus: true, total: true, currency: true, createdAt: true, store: { select: { id: true, name: true } }, items: { select: { id: true, name: true, quantity: true, unitPrice: true, total: true }, orderBy: { name: "asc" } } } }),
+        prisma.order.count({ where: orderWhere })
+      ]);
+      const includedOrders = orders.filter(order => !isExcludedSpendStatus(String(order.status)));
+      const allValidOrders = await prisma.order.findMany({ where: { ...orderWhere, status: { notIn: ["CANCELLED", "REFUNDED"] } }, orderBy: { createdAt: "desc" }, select: { total: true, createdAt: true, items: { select: { name: true, quantity: true } } } });
+      if (!customer) return respond(res, 404, { error: "customer_not_found" });
+      const totalSpend = allValidOrders.reduce((sum, order) => sum + Number(order.total), 0);
       const averageOrderValue = includedOrders.length ? totalSpend / includedOrders.length : 0;
       const productCounts = new Map<string, { name: string; quantity: number }>();
       for (const order of includedOrders) for (const item of order.items) {
