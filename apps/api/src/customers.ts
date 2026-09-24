@@ -124,9 +124,9 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
       const allValidOrders = await prisma.order.findMany({ where: { ...orderWhere, status: { notIn: ["CANCELLED", "REFUNDED"] } }, orderBy: { createdAt: "desc" }, select: { total: true, createdAt: true, items: { select: { name: true, quantity: true } } } });
       if (!customer) return respond(res, 404, { error: "customer_not_found" });
       const totalSpend = allValidOrders.reduce((sum, order) => sum + Number(order.total), 0);
-      const averageOrderValue = includedOrders.length ? totalSpend / includedOrders.length : 0;
+      const averageOrderValue = allValidOrders.length ? totalSpend / allValidOrders.length : 0;
       const productCounts = new Map<string, { name: string; quantity: number }>();
-      for (const order of includedOrders) for (const item of order.items) {
+      for (const order of allValidOrders) for (const item of order.items) {
         const current = productCounts.get(item.name) ?? { name: item.name, quantity: 0 };
         current.quantity += item.quantity;
         productCounts.set(item.name, current);
