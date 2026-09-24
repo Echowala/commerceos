@@ -54,7 +54,7 @@ const matches = (rules: SegmentRules, customer: CustomerForSegment): boolean => 
       const hasTag = customer.tags.some(({ tag }): boolean => tag.name.toLowerCase() === String(rule.value).trim().toLowerCase());
       return rule.operator === "eq" ? hasTag : !hasTag;
     }
-    const actual: number | null = rule.field === "orderCount" ? validOrders.length : rule.field === "totalSpend" ? spend : lastOrderDaysAgo;
+    const actual: number | null = rule.field === "orderCount" ? customer.orderCount : rule.field === "totalSpend" ? spend : lastOrderDaysAgo;
     if (actual === null) return false;
     const expected = Number(rule.value);
     if (rule.operator === "gte") return actual >= expected;
