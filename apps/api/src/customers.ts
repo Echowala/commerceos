@@ -47,16 +47,17 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
         prisma.customer.findMany({ where: { tenantId }, orderBy: { createdAt: "desc" }, skip: (page - 1) * pageSize, take: pageSize, select: { id: true, email: true, phone: true, firstName: true, lastName: true, createdAt: true, updatedAt: true } })
       ]);
       const customerIds = customers.map(customer => customer.id);
-      const orders = customerIds.length === 0 ? [] : await prisma.order.findMany({ where: { tenantId, customerId: { in: customerIds } }, select: { customerId: true, total: true, createdAt: true, status: true }, orderBy: { createdAt: "desc" } });
-      const metrics = new Map<string, { orderCount: number; totalSpend: number; lastOrderAt: Date | null }>();
-      for (const order of orders) {
-        if (!order.customerId) continue;
-        const current = metrics.get(order.customerId) ?? { orderCount: 0, totalSpend: 0, lastOrderAt: null };
-        current.orderCount += 1;
-        if (!isExcludedSpendStatus(String(order.status))) current.totalSpend += Number(order.total);
-        if (!current.lastOrderAt || order.createdAt > current.lastOrderAt) current.lastOrderAt = order.createdAt;
-        metrics.set(order.customerId, current);
-      }
+      const orderMetrics = customerIds.length === 0 ? [] : await prisma.order.groupBy({
+        by: ["customerId"],
+        where: { tenantId, customerId: { in: customerIds }, status: { notIn: ["CANCELLED", "REFUNDED"] } },
+        _count: { _all: true },
+        _sum: { total: true },
+        _max: { createdAt: true }
+      });
+      const metrics = new Map(orderMetrics.filter(metric => metric.customerId).map(metric => [
+        metric.customerId as string,
+        { orderCount: metric._count._all, totalSpend: Number(metric._sum.total ?? 0), lastOrderAt: metric._max.createdAt }
+      ]));
       return respond(res, 200, {
         items: customers.map(customer => {
           const metric = metrics.get(customer.id) ?? { orderCount: 0, totalSpend: 0, lastOrderAt: null };
@@ -119,8 +120,8 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
         productCounts.set(item.name, current);
       }
       const topProducts = [...productCounts.values()].sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name)).slice(0, 5);
-      const lastOrderAt = customer.orders[0]?.createdAt ?? null;
-      return respond(res, 200, { ...customer, orderCount: customer.orders.length, totalSpend: money(totalSpend), averageOrderValue: money(averageOrderValue), lastOrderAt: lastOrderAt?.toISOString() ?? null, topProducts, orders: customer.orders.map(order => ({ ...order, total: order.total.toString(), createdAt: order.createdAt.toISOString(), items: order.items.map(item => ({ ...item, unitPrice: item.unitPrice.toString(), total: item.total.toString() })) })) });
+      const lastOrderAt = includedOrders[0]?.createdAt ?? null;
+      return respond(res, 200, { ...customer, orderCount: includedOrders.length, totalSpend: money(totalSpend), averageOrderValue: money(averageOrderValue), lastOrderAt: lastOrderAt?.toISOString() ?? null, topProducts, orders: customer.orders.map(order => ({ ...order, total: order.total.toString(), createdAt: order.createdAt.toISOString(), items: order.items.map(item => ({ ...item, unitPrice: item.unitPrice.toString(), total: item.total.toString() })) })) });
     }
 
     return respond(res, 404, { error: "customer_route_not_found" });
