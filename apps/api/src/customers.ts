@@ -120,9 +120,7 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
         prisma.order.findMany({ where: orderWhere, orderBy: { createdAt: "desc" }, ...(hasOrderPagination ? { skip: (orderPage - 1) * orderPageSize, take: orderPageSize } : {}), select: { id: true, orderNumber: true, status: true, paymentStatus: true, total: true, currency: true, createdAt: true, store: { select: { id: true, name: true } }, items: { select: { id: true, name: true, quantity: true, unitPrice: true, total: true }, orderBy: { name: "asc" } } } }),
         prisma.order.count({ where: orderWhere })
       ]);
-      const includedOrders = orders.filter(order => !isExcludedSpendStatus(String(order.status)));
       const allValidOrders = await prisma.order.findMany({ where: { ...orderWhere, status: { notIn: ["CANCELLED", "REFUNDED"] } }, orderBy: { createdAt: "desc" }, select: { total: true, createdAt: true, items: { select: { name: true, quantity: true } } } });
-      if (!customer) return respond(res, 404, { error: "customer_not_found" });
       const totalSpend = allValidOrders.reduce((sum, order) => sum + Number(order.total), 0);
       const averageOrderValue = allValidOrders.length ? totalSpend / allValidOrders.length : 0;
       const productCounts = new Map<string, { name: string; quantity: number }>();
@@ -132,8 +130,8 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
         productCounts.set(item.name, current);
       }
       const topProducts = [...productCounts.values()].sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name)).slice(0, 5);
-      const lastOrderAt = includedOrders[0]?.createdAt ?? null;
-      return respond(res, 200, { ...customer, orderCount: includedOrders.length, totalSpend: money(totalSpend), averageOrderValue: money(averageOrderValue), lastOrderAt: lastOrderAt?.toISOString() ?? null, topProducts, orders: customer.orders.map(order => ({ ...order, total: order.total.toString(), createdAt: order.createdAt.toISOString(), items: order.items.map(item => ({ ...item, unitPrice: item.unitPrice.toString(), total: item.total.toString() })) })) });
+      const lastOrderAt = allValidOrders[0]?.createdAt ?? null;
+      return respond(res, 200, { ...customer, orderCount: allValidOrders.length, totalSpend: money(totalSpend), averageOrderValue: money(averageOrderValue), lastOrderAt: lastOrderAt?.toISOString() ?? null, topProducts, orders: orders.map(order => ({ ...order, total: order.total.toString(), createdAt: order.createdAt.toISOString(), items: order.items.map(item => ({ ...item, unitPrice: item.unitPrice.toString(), total: item.total.toString() })) })) });
     }
 
     return respond(res, 404, { error: "customer_route_not_found" });
