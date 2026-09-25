@@ -109,8 +109,13 @@ export const handleSegmentsRequest = async (req: IncomingMessage, res: ServerRes
       const customers = await prisma.customer.findMany({ where: { tenantId }, orderBy: { createdAt: "desc" }, select: { id: true, email: true, phone: true, firstName: true, lastName: true, tags: { select: { tag: { select: { name: true } } } } } });
       const orderMetrics = await prisma.order.groupBy({ by: ["customerId"], where: { tenantId, customerId: { not: null }, status: { notIn: ["CANCELLED", "REFUNDED"] } }, _count: { _all: true }, _sum: { total: true }, _max: { createdAt: true } });
       const metrics = new Map(orderMetrics.filter(metric => metric.customerId).map(metric => [metric.customerId as string, { orderCount: metric._count._all, totalSpend: Number(metric._sum.total ?? 0), lastOrder: metric._max.createdAt }]));
-      const result = customers.map(customer => ({ customer, metric: metrics.get(customer.id) ?? { orderCount: 0, totalSpend: 0, lastOrder: null } })).filter(({ customer, metric }) => matches(rules, { id: customer.id, ...metric, tags: customer.tags })).map(({ customer, metric }) => ({ id: customer.id, email: customer.email, phone: customer.phone, firstName: customer.firstName, lastName: customer.lastName, orderCount: metric.orderCount, totalSpend: metric.totalSpend.toFixed(2), lastOrderAt: metric.lastOrder?.toISOString() ?? null, tags: customer.tags.map(({ tag }) => tag.name) }));
-      return respond(res, 200, result);
+      const requestedPage = Number(url.searchParams.get("page") ?? "1");
+      const requestedPageSize = Number(url.searchParams.get("pageSize") ?? "25");
+      const page = Number.isInteger(requestedPage) ? Math.max(1, Math.min(requestedPage, 10_000)) : 1;
+      const pageSize = Number.isInteger(requestedPageSize) ? Math.max(1, Math.min(requestedPageSize, 100)) : 25;
+      const matched = customers.map(customer => ({ customer, metric: metrics.get(customer.id) ?? { orderCount: 0, totalSpend: 0, lastOrder: null } })).filter(({ customer, metric }) => matches(rules, { id: customer.id, ...metric, tags: customer.tags }));
+      const result = matched.slice((page - 1) * pageSize, page * pageSize).map(({ customer, metric }) => ({ id: customer.id, email: customer.email, phone: customer.phone, firstName: customer.firstName, lastName: customer.lastName, orderCount: metric.orderCount, totalSpend: metric.totalSpend.toFixed(2), lastOrderAt: metric.lastOrder?.toISOString() ?? null, tags: customer.tags.map(({ tag }) => tag.name) }));
+      return respond(res, 200, { items: result, total: matched.length, page, pageSize, totalPages: Math.ceil(matched.length / pageSize) });
     }
     return respond(res, 404, { error: "segment_route_not_found" });
   } catch (error) {
