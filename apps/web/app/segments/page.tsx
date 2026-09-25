@@ -5,7 +5,8 @@ import { api } from "../../lib/api";
 
 type Rule = { field: "orderCount" | "totalSpend" | "lastOrderDaysAgo" | "tag"; operator: "gte" | "lte" | "eq" | "neq" | "gt" | "lt"; value: string | number };
 type Segment = { id: string; name: string; description?: string | null; rules: { match: "all" | "any"; rules: Rule[] }; customerCount: number };
-type Member = { id: string; email?: string | null; phone?: string | null; firstName?: string | null; lastName?: string | null; orderCount: number; totalSpend: string; lastOrderAt: string | null; tags: string[] };\ntype MemberResponse = { items: Member[]; total: number; page: number; pageSize: number; totalPages: number };
+type Member = { id: string; email?: string | null; phone?: string | null; firstName?: string | null; lastName?: string | null; orderCount: number; totalSpend: string; lastOrderAt: string | null; tags: string[] };
+type MemberResponse = { items: Member[]; total: number; page: number; pageSize: number; totalPages: number };
 
 const fieldLabels = { orderCount: "Orders", totalSpend: "Spend", lastOrderDaysAgo: "Days since last order", tag: "Tag" } as const;
 const operators = ["gte", "lte", "eq", "neq", "gt", "lt"] as const;
@@ -14,7 +15,10 @@ const emptyRule = (): Rule => ({ field: "orderCount", operator: "gte", value: 1 
 
 export default function SegmentsPage() {
   const [segments, setSegments] = useState<Segment[]>([]);
-  const [selected, setSelected] = useState<Member[]>([]);\n  const [memberPage, setMemberPage] = useState(1);\n  const [memberTotalPages, setMemberTotalPages] = useState(1);\n  const memberPageSize = 25;
+  const [selected, setSelected] = useState<Member[]>([]);
+  const [memberPage, setMemberPage] = useState(1);
+  const [memberTotalPages, setMemberTotalPages] = useState(1);
+  const memberPageSize = 25;
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [match, setMatch] = useState<"all" | "any">("all");
