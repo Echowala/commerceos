@@ -84,7 +84,7 @@ export const handleAutomationRequest = async (req: IncomingMessage, res: ServerR
   try {
     const context = await getRequestContext(req.headers); const tenantId = requireTenant(context);
     if (url.pathname === "/automations" && req.method === "GET") {
-      const automations = await prisma.automation.findMany({ where: { tenantId }, orderBy: { updatedAt: "desc" }, include: { _count: { select: { executions: true } } } });
+      const automations = await prisma.automation.findMany({ where: { tenantId }, orderBy: { updatedAt: "desc" }, take: 100, include: { _count: { select: { executions: true } } } });
       return respond(res, 200, automations);
     }
     if (url.pathname === "/automations" && req.method === "POST") { requireRole(context, "OWNER", "ADMIN");
