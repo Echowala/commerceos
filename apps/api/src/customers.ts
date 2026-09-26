@@ -110,14 +110,13 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
     if (match && req.method === "GET") {
       const requestedOrderPage = Number(url.searchParams.get("orderPage") ?? "1");
       const requestedOrderPageSize = Number(url.searchParams.get("orderPageSize") ?? "25");
-      const hasOrderPagination = url.searchParams.has("orderPage") || url.searchParams.has("orderPageSize");
       const orderPage = Number.isInteger(requestedOrderPage) ? Math.max(1, Math.min(requestedOrderPage, 10_000)) : 1;
       const orderPageSize = Number.isInteger(requestedOrderPageSize) ? Math.max(1, Math.min(requestedOrderPageSize, 100)) : 25;
       const customer = await prisma.customer.findFirst({ where: { id: match[1], tenantId }, select: { id: true, email: true, phone: true, firstName: true, lastName: true, createdAt: true, updatedAt: true } });
       if (!customer) return respond(res, 404, { error: "customer_not_found" });
       const orderWhere = { tenantId, customerId: customer.id };
       const [orders, orderTotal] = await Promise.all([
-        prisma.order.findMany({ where: orderWhere, orderBy: { createdAt: "desc" }, ...(hasOrderPagination ? { skip: (orderPage - 1) * orderPageSize, take: orderPageSize } : {}), select: { id: true, orderNumber: true, status: true, paymentStatus: true, total: true, currency: true, createdAt: true, store: { select: { id: true, name: true } }, items: { select: { id: true, name: true, quantity: true, unitPrice: true, total: true }, orderBy: { name: "asc" } } } }),
+        prisma.order.findMany({ where: orderWhere, orderBy: { createdAt: "desc" }, skip: (orderPage - 1) * orderPageSize, take: orderPageSize, select: { id: true, orderNumber: true, status: true, paymentStatus: true, total: true, currency: true, createdAt: true, store: { select: { id: true, name: true } }, items: { select: { id: true, name: true, quantity: true, unitPrice: true, total: true }, orderBy: { name: "asc" } } } }),
         prisma.order.count({ where: orderWhere })
       ]);
       const allValidOrders = await prisma.order.findMany({ where: { ...orderWhere, status: { notIn: ["CANCELLED", "REFUNDED"] } }, orderBy: { createdAt: "desc" }, select: { total: true, createdAt: true, items: { select: { name: true, quantity: true } } } });
@@ -131,7 +130,7 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
       }
       const topProducts = [...productCounts.values()].sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name)).slice(0, 5);
       const lastOrderAt = allValidOrders[0]?.createdAt ?? null;
-      return respond(res, 200, { ...customer, orderCount: allValidOrders.length, totalSpend: money(totalSpend), averageOrderValue: money(averageOrderValue), lastOrderAt: lastOrderAt?.toISOString() ?? null, topProducts, orders: orders.map(order => ({ ...order, total: order.total.toString(), createdAt: order.createdAt.toISOString(), items: order.items.map(item => ({ ...item, unitPrice: item.unitPrice.toString(), total: item.total.toString() })) })) });
+      return respond(res, 200, { ...customer, orderCount: allValidOrders.length, totalSpend: money(totalSpend), averageOrderValue: money(averageOrderValue), lastOrderAt: lastOrderAt?.toISOString() ?? null, topProducts, orderTotal, orderPage, orderPageSize, orderTotalPages: Math.ceil(orderTotal / orderPageSize), orders: orders.map(order => ({ ...order, total: order.total.toString(), createdAt: order.createdAt.toISOString(), items: order.items.map(item => ({ ...item, unitPrice: item.unitPrice.toString(), total: item.total.toString() })) })) });
     }
 
     return respond(res, 404, { error: "customer_route_not_found" });
