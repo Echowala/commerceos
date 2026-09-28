@@ -4,7 +4,8 @@ import { FormEvent, useEffect, useState } from "react";
 import { api, clearToken } from "../../lib/api";
 
 type Store = { id: string; name: string; currency: string };
-type Product = { id: string; name: string; slug: string; status: string; storeId?: string; variants: { id: string; sku: string; price: string | number; stock: number }[] };\ntype ProductResponse = { items: Product[]; total: number; page: number; pageSize: number; totalPages: number };
+type Product = { id: string; name: string; slug: string; status: string; storeId?: string; variants: { id: string; sku: string; price: string | number; stock: number }[] };
+type ProductResponse = { items: Product[]; total: number; page: number; pageSize: number; totalPages: number };
 
 export default function ProductsPage() {
   const [stores, setStores] = useState<Store[]>([]);
@@ -17,13 +18,15 @@ export default function ProductsPage() {
   const [status, setStatus] = useState("DRAFT");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");\n  const [page, setPage] = useState(1);\n  const [totalPages, setTotalPages] = useState(1);
+  const [error, setError] = useState("");
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
 
   const load = async () => {
     try {
-      const [storeData, productData] = await Promise.all([api<Store[]>("/stores"), api<Product[]>("/products")]);
+      const [storeData, productData] = await Promise.all([api<Store[]>("/stores"), api<ProductResponse>(`/products?page=${page}&pageSize=25`)]);
       setStores(storeData);
-      setProducts(productData);
+      setProducts(productData.items);\n      setTotalPages(productData.totalPages);
       if (!storeId && storeData[0]) setStoreId(storeData[0].id);
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to load products"); }
   };
@@ -75,7 +78,7 @@ export default function ProductsPage() {
         </form>}
       </section>
       <section className="section"><div className="detail-header"><div><h2>Catalog</h2><p className="muted">Page {page} of {totalPages}.</p></div></div>
-        {products.length === 0 ? <p className="muted">No products yet.</p> : <div className="table-wrap"><table><thead><tr><th>Product</th><th>SKU</th><th>Price</th><th>Stock</th><th>Status</th><th>Action</th></tr></thead><tbody>{products.map(product => { const variant = product.variants[0]; return <tr key={product.id}><td><strong>{product.name}</strong><div className="muted small">/{product.slug}</div></td><td>{variant?.sku ?? "—"}</td><td>{variant?.price ?? "0"}</td><td>{variant?.stock ?? 0}</td><td><span className="badge">{product.status}</span></td><td><button className="back-link" type="button" onClick={() => startEdit(product)}>Edit</button></td></tr>; })}</tbody></table></div>}
+        {products.length === 0 ? <p className="muted">No products yet.</p> : <div className="table-wrap"><table><thead><tr><th>Product</th><th>SKU</th><th>Price</th><th>Stock</th><th>Status</th><th>Action</th></tr></thead><tbody>{products.map(product => { const variant = product.variants[0]; return <tr key={product.id}><td><strong>{product.name}</strong><div className="muted small">/{product.slug}</div></td><td>{variant?.sku ?? "—"}</td><td>{variant?.price ?? "0"}</td><td>{variant?.stock ?? 0}</td><td><span className="badge">{product.status}</span></td><td><button className="back-link" type="button" onClick={() => startEdit(product)}>Edit</button></td></tr>; })}</tbody></table></div>}{products.length > 0 && <div className="detail-header"><button className="back-link" type="button" disabled={page <= 1} onClick={() => setPage(value => Math.max(1, value - 1))}>Previous</button><span className="muted">Page {page} of {totalPages}</span><button className="back-link" type="button" disabled={page >= totalPages} onClick={() => setPage(value => Math.min(totalPages, value + 1))}>Next</button></div>}
       </section>
     </section>
   </main>;
