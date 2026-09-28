@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../lib/api";
 
-type Order = {
+type OrderResponse = { items: Order[]; total: number; page: number; pageSize: number; totalPages: number };\ntype Order = {
   id: string; orderNumber: string; status: string; paymentStatus: string;
   total: string | number; currency: string; createdAt: string;
   customer?: { id: string; email?: string | null; firstName?: string | null; lastName?: string | null } | null;
@@ -17,15 +17,15 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState("");\n  const [page, setPage] = useState(1);\n  const [totalPages, setTotalPages] = useState(1);
 
   const loadOrders = async () => {
-    try { setError(""); setOrders(await api<Order[]>("/orders")); }
+    try { setError(""); const result = await api<OrderResponse>(`/orders?page=${page}&pageSize=25`); setOrders(result.items); setTotalPages(result.totalPages); }
     catch (e) { setError(e instanceof Error ? e.message : "Unable to load orders"); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { void loadOrders(); }, []);
+  useEffect(() => { void loadOrders(); }, [page]);
 
   const updateStatus = async (orderId: string, status: string) => {
     setUpdating(orderId); setError("");
