@@ -26,7 +26,8 @@ export default function ProductsPage() {
     try {
       const [storeData, productData] = await Promise.all([api<Store[]>("/stores"), api<ProductResponse>(`/products?page=${page}&pageSize=25`)]);
       setStores(storeData);
-      setProducts(productData.items);\n      setTotalPages(productData.totalPages);
+      setProducts(productData.items);
+      setTotalPages(productData.totalPages);
       if (!storeId && storeData[0]) setStoreId(storeData[0].id);
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to load products"); }
   };
