@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { prisma } from "@commerceos/database";
+import { Prisma, OrderStatus } from "@prisma/client";
 import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
 
 const json = (res: ServerResponse, status: number, body: unknown): void => {
@@ -119,16 +120,16 @@ export const handleCustomersRequest = async (req: IncomingMessage, res: ServerRe
         prisma.order.findMany({ where: orderWhere, orderBy: { createdAt: "desc" }, skip: (orderPage - 1) * orderPageSize, take: orderPageSize, select: { id: true, orderNumber: true, status: true, paymentStatus: true, total: true, currency: true, createdAt: true, store: { select: { id: true, name: true } }, items: { select: { id: true, name: true, quantity: true, unitPrice: true, total: true }, orderBy: { name: "asc" } } } }),
         prisma.order.count({ where: orderWhere })
       ]);
-      const validOrderWhere = { ...orderWhere, status: { notIn: ["CANCELLED", "REFUNDED"] } };
+      const validOrderWhere: Prisma.OrderWhereInput = { ...orderWhere, status: { notIn: [OrderStatus.CANCELLED, OrderStatus.REFUNDED] } };
       const [orderMetrics, topProductRows] = await Promise.all([
         prisma.order.aggregate({ where: validOrderWhere, _count: { _all: true }, _sum: { total: true }, _avg: { total: true }, _max: { createdAt: true } }),
         prisma.orderItem.groupBy({ by: ["name"], where: { order: validOrderWhere }, _sum: { quantity: true }, orderBy: { _sum: { quantity: "desc" } }, take: 5 })
       ]);
-      const validOrderCount = orderMetrics._count._all;
-      const totalSpend = Number(orderMetrics._sum.total ?? 0);
-      const averageOrderValue = Number(orderMetrics._avg.total ?? 0);
-      const topProducts = topProductRows.map(item => ({ name: item.name, quantity: item._sum.quantity ?? 0 }));
-      const lastOrderAt = orderMetrics._max.createdAt ?? null;
+      const validOrderCount = orderMetrics._count?._all ?? 0;
+      const totalSpend = Number(orderMetrics._sum?.total ?? 0);
+      const averageOrderValue = Number(orderMetrics._avg?.total ?? 0);
+      const topProducts = topProductRows.map(item => ({ name: item.name, quantity: item._sum?.quantity ?? 0 }));
+      const lastOrderAt = orderMetrics._max?.createdAt ?? null;
       return respond(res, 200, { ...customer, orderCount: validOrderCount, totalSpend: money(totalSpend), averageOrderValue: money(averageOrderValue), lastOrderAt: lastOrderAt?.toISOString() ?? null, topProducts, orderTotal, orderPage, orderPageSize, orderTotalPages: Math.ceil(orderTotal / orderPageSize), orders: orders.map(order => ({ ...order, total: order.total.toString(), createdAt: order.createdAt.toISOString(), items: order.items.map(item => ({ ...item, unitPrice: item.unitPrice.toString(), total: item.total.toString() })) })) });
     }
 
