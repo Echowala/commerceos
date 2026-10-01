@@ -149,7 +149,7 @@ export default function StoreSettingsPage() {
                   <h2>Storefront</h2>
                   <p className="muted">Preview the customer-facing storefront for this store.</p>
                 </div>
-                <a className="secondary-button" href={`/store/preview/${store.slug`}>Preview</a>
+                <a className="secondary-button" href={`/store/preview/${store.slug}`}>Preview</a>
               </div>
               <div className="cards compact">
                 <div className="card">
