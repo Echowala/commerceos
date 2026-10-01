@@ -3,16 +3,12 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api, clearToken } from "../../lib/api";
 
-type Store = {
-  id: string;
-  name: string;
-  slug: string;
-  currency: string;
-  createdAt: string;
-};
+type Store = { id: string; name: string; slug: string; currency: string; createdAt: string };
+type Me = { tenant: { slug: string } };
 
 export default function StoresPage() {
   const [stores, setStores] = useState<Store[]>([]);
+  const [tenantSlug, setTenantSlug] = useState("");
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [currency, setCurrency] = useState("PKR");
@@ -21,7 +17,9 @@ export default function StoresPage() {
 
   const load = async () => {
     try {
-      setStores(await api<Store[]>("/stores"));
+      const [storeData, me] = await Promise.all([api<Store[]>("/stores"), api<Me>("/me")]);
+      setStores(storeData);
+      setTenantSlug(me.tenant.slug);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to load stores");
     }
@@ -36,11 +34,7 @@ export default function StoresPage() {
     try {
       const store = await api<Store>("/stores", {
         method: "POST",
-        body: JSON.stringify({
-          name: name.trim(),
-          slug: slug.trim() || undefined,
-          currency: currency.trim().toUpperCase(),
-        }),
+        body: JSON.stringify({ name: name.trim(), slug: slug.trim() || undefined, currency: currency.trim().toUpperCase() }),
       });
       setStores(current => [store, ...current]);
       setName("");
@@ -95,21 +89,10 @@ export default function StoresPage() {
             </div>
           </div>
           <form onSubmit={submit} className="tracking-form">
-            <label>
-              Store name
-              <input value={name} onChange={e => setName(e.target.value)} placeholder="My Store" required />
-            </label>
-            <label>
-              Store slug
-              <input value={slug} onChange={e => setSlug(e.target.value)} placeholder="my-store" />
-            </label>
-            <label>
-              Currency
-              <input value={currency} onChange={e => setCurrency(e.target.value)} maxLength={3} required />
-            </label>
-            <button className="checkout-button" disabled={saving}>
-              {saving ? "Creating…" : "Create store"}
-            </button>
+            <label>Store name<input value={name} onChange={e => setName(e.target.value)} placeholder="My Store" required /></label>
+            <label>Store slug<input value={slug} onChange={e => setSlug(e.target.value)} placeholder="my-store" /></label>
+            <label>Currency<input value={currency} onChange={e => setCurrency(e.target.value)} maxLength={3} required /></label>
+            <button className="checkout-button" disabled={saving}>{saving ? "Creating…" : "Create store"}</button>
           </form>
         </section>
 
@@ -125,18 +108,14 @@ export default function StoresPage() {
           ) : (
             <div className="table-wrap">
               <table>
-                <thead>
-                  <tr><th>Store</th><th>Slug</th><th>Currency</th><th>Storefront</th></tr>
-                </thead>
+                <thead><tr><th>Store</th><th>Slug</th><th>Currency</th><th>Storefront</th></tr></thead>
                 <tbody>
                   {stores.map(store => (
                     <tr key={store.id}>
                       <td><strong>{store.name}</strong></td>
                       <td>/{store.slug}</td>
                       <td>{store.currency}</td>
-                      <td>
-                        <a className="back-link" href={`/store/${store.slug}/${store.slug}`}>Open</a>
-                      </td>
+                      <td>{tenantSlug ? <a className="back-link" href={`/store/${tenantSlug}/${store.slug}`}>Open</a> : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
