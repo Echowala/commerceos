@@ -108,13 +108,14 @@ export default function StoresPage() {
           ) : (
             <div className="table-wrap">
               <table>
-                <thead><tr><th>Store</th><th>Slug</th><th>Currency</th><th>Storefront</th></tr></thead>
+                <thead><tr><th>Store</th><th>Slug</th><th>Currency</th><th>Settings</th><th>Storefront</th></tr></thead>
                 <tbody>
                   {stores.map(store => (
                     <tr key={store.id}>
                       <td><strong>{store.name}</strong></td>
                       <td>/{store.slug}</td>
                       <td>{store.currency}</td>
+                      <td><a className="back-link" href={`/stores/${store.id}`}>Manage</a></td>
                       <td>{tenantSlug ? <a className="back-link" href={`/store/${tenantSlug}/${store.slug}`}>Open</a> : "—"}</td>
                     </tr>
                   ))}
