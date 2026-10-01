@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
-import { prisma } from "@commerceos/database";
+import { prisma, Prisma } from "@commerceos/database";
 import { createToken, verifyPassword } from "./auth.js";
 import { signup } from "./signup.js";
 import { createPublicOrder } from "./public-checkout.js";
