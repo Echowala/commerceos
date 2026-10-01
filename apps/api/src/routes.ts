@@ -98,6 +98,41 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (url.pathname === "/stores" && req.method === "POST") { requireRole(context, "OWNER", "ADMIN"); const input = await body(req); if (!input.name) return json(res, 400, { error: "name is required" }); const slug = slugify(input.slug ?? input.name); if (!slug) return json(res, 400, { error: "valid slug is required" }); const createdStore = await prisma.store.create({ data: { tenantId, name: input.name, slug, currency: input.currency ?? "PKR" } });
       await audit(tenantId, context.auth!.userId, "STORE_CREATED", "Store", createdStore.id, req, { name: createdStore.name });
       return json(res, 201, createdStore); }
+    const storeMatch = url.pathname.match(/^\/stores\/([^/]+)$/);
+    if (storeMatch && req.method === "GET") {
+      const store = await prisma.store.findFirst({
+        where: { id: storeMatch[1], tenantId },
+        include: { _count: { select: { products: true, orders: true } } },
+      });
+      return store ? json(res, 200, store) : json(res, 404, { error: "store_not_found" });
+    }
+    if (storeMatch && req.method === "PATCH") {
+      requireRole(context, "OWNER", "ADMIN");
+      const input = await body(req);
+      const current = await prisma.store.findFirst({ where: { id: storeMatch[1], tenantId } });
+      if (!current) return json(res, 404, { error: "store_not_found" });
+      const name = input.name == null ? current.name : String(input.name).trim();
+      const slug = input.slug == null ? current.slug : slugify(String(input.slug));
+      const currency = input.currency == null ? current.currency : String(input.currency).trim().toUpperCase();
+      if (!name) return json(res, 400, { error: "name is required" });
+      if (!slug) return json(res, 400, { error: "valid slug is required" });
+      if (!/^[A-Z]{3}$/.test(currency)) return json(res, 400, { error: "currency must be a 3-letter code" });
+      try {
+        const updated = await prisma.store.update({
+          where: { id: current.id },
+          data: { name, slug, currency },
+        });
+        await audit(tenantId, context.auth!.userId, "STORE_UPDATED", "Store", updated.id, req, {
+          name: updated.name,
+          slug: updated.slug,
+          currency: updated.currency,
+        });
+        return json(res, 200, updated);
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return json(res, 409, { error: "store_slug_taken" });
+        throw error;
+      }
+    }
     if (url.pathname === "/products" && req.method === "GET") { const requestedPage = Number(url.searchParams.get("page") ?? 1); const page = Number.isFinite(requestedPage) ? Math.min(10000, Math.max(1, Math.floor(requestedPage))) : 1; const requestedPageSize = Number(url.searchParams.get("pageSize") ?? 25); const pageSize = Number.isFinite(requestedPageSize) ? Math.min(100, Math.max(1, Math.floor(requestedPageSize))) : 25; const where = { store: { tenantId } }; const [items, total] = await Promise.all([prisma.product.findMany({ where, include: { variants: true }, orderBy: { createdAt: "desc" }, skip: (page - 1) * pageSize, take: pageSize }), prisma.product.count({ where })]); return json(res, 200, { items, total, page, pageSize, totalPages: Math.ceil(total / pageSize) }); }
     const productMatch = url.pathname.match(/^\/products\/([^/]+)$/);
     if (productMatch && req.method === "GET") { const product = await prisma.product.findFirst({ where: { id: productMatch[1], store: { tenantId } }, include: { variants: true, store: { select: { id: true, name: true, currency: true } } } }); return product ? json(res, 200, product) : json(res, 404, { error: "product_not_found" }); }
