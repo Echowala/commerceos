@@ -22,12 +22,15 @@ type Order = {
 };
 
 const statuses = ["PENDING", "CONFIRMED", "PROCESSING", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"];
+const paymentStatuses = ["PENDING", "PAID", "FAILED", "PARTIALLY_REFUNDED", "REFUNDED"];
 
 export default function OrderDetailPage({ params }: { params: { id: string } }) {
   const [order, setOrder] = useState<Order | null>(null);
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [paymentStatus, setPaymentStatus] = useState("");
+  const [paymentSaving, setPaymentSaving] = useState(false);
   const [error, setError] = useState("");
 
   const load = async () => {
@@ -35,6 +38,7 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
       const result = await api<Order>(`/orders/${params.id}`);
       setOrder(result);
       setStatus(result.status);
+      setPaymentStatus(result.paymentStatus);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to load order");
     } finally {
@@ -43,6 +47,25 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
   };
 
   useEffect(() => { void load(); }, [params.id]);
+
+  const updatePaymentStatus = async (nextStatus: string) => {
+    if (!order || nextStatus === order.paymentStatus) return;
+    setPaymentSaving(true);
+    setError("");
+    try {
+      const result = await api<{ paymentStatus: string }>(`/orders/${order.id}/payment-status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      setPaymentStatus(result.paymentStatus);
+      setOrder(current => current ? { ...current, paymentStatus: result.paymentStatus } : current);
+    } catch (e) {
+      setPaymentStatus(order.paymentStatus);
+      setError(e instanceof Error ? e.message : "Unable to update payment");
+    } finally {
+      setPaymentSaving(false);
+    }
+  };
 
   const updateStatus = async () => {
     if (!order || status === order.status) return;
@@ -91,7 +114,7 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
 
       <div className="cards">
         <div className="card"><div className="muted">Order total</div><div className="metric">{order.currency} {order.total}</div></div>
-        <div className="card"><div className="muted">Payment</div><div className="metric">{order.paymentStatus}</div><small className="muted">{order.paymentMethod}</small></div>
+        <div className="card"><div className="muted">Payment</div><div className="metric">{order.paymentStatus}</div><small className="muted">{order.paymentMethod}</small><select className="status-select" value={paymentStatus} disabled={paymentSaving} onChange={e => void updatePaymentStatus(e.target.value)}>{paymentStatuses.map(value => <option key={value} value={value}>{value}</option>)}</select></div>
         <div className="card"><div className="muted">Customer</div><div className="metric">{customerName}</div><small className="muted">{order.customer?.email ?? "Guest checkout"}</small></div>
       </div>
 
