@@ -12,11 +12,13 @@ type Store = {
   createdAt: string;
   _count?: { products: number; orders: number };
 };
+type Me = { tenant: { slug: string } };
 
 export default function StoreSettingsPage() {
   const params = useParams<{ storeId: string }>();
   const storeId = params.storeId;
   const [store, setStore] = useState<Store | null>(null);
+  const [tenantSlug, setTenantSlug] = useState("");
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [currency, setCurrency] = useState("PKR");
@@ -29,8 +31,12 @@ export default function StoreSettingsPage() {
     setLoading(true);
     setError("");
     try {
-      const data = await api<Store>(`/stores/${storeId}`);
+      const [data, me] = await Promise.all([
+        api<Store>(`/stores/${storeId}`),
+        api<Me>("/me"),
+      ]);
       setStore(data);
+      setTenantSlug(me.tenant.slug);
       setName(data.name);
       setSlug(data.slug);
       setCurrency(data.currency);
@@ -75,6 +81,8 @@ export default function StoreSettingsPage() {
     clearToken();
     window.location.href = "/login";
   };
+
+  const storefrontHref = store && tenantSlug ? `/store/${tenantSlug}/${store.slug}` : "";
 
   return (
     <main className="dashboard">
@@ -147,9 +155,9 @@ export default function StoreSettingsPage() {
               <div className="detail-header">
                 <div>
                   <h2>Storefront</h2>
-                  <p className="muted">Preview the customer-facing storefront for this store.</p>
+                  <p className="muted">Open the actual customer-facing storefront for this store.</p>
                 </div>
-                <a className="secondary-button" href={`/store/preview/${store.slug}`}>Preview</a>
+                {storefrontHref ? <a className="secondary-button" href={storefrontHref}>Open storefront</a> : <span className="muted">Preparing preview…</span>}
               </div>
               <div className="cards compact">
                 <div className="card">
@@ -161,7 +169,7 @@ export default function StoreSettingsPage() {
                   <div className="metric">{store._count?.orders ?? 0}</div>
                 </div>
               </div>
-              <p className="muted small">Public storefront routing can be connected to your domain configuration as the storefront layer expands.</p>
+              <p className="muted small">Public storefront routing is currently tenant/store based; custom domains can be added as the domain layer expands.</p>
             </section>
           </>
         )}
