@@ -3,6 +3,7 @@ import { prisma } from "@commerceos/database";
 import { handleRequest } from "./routes.js";
 import { handleInventoryRequest } from "./inventory.js";
 import { handleOrderStatusRequest } from "./order-status.js";
+import { handlePaymentStatusRequest } from "./payment-status.js";
 import { handleCustomersRequest } from "./customers.js";
 import { handleCrmRequest } from "./crm.js";
 import { handleSegmentsRequest } from "./segments.js";
@@ -44,6 +45,8 @@ const server = createServer(async (req, res) => {
     if ((req.url ?? "/").match(/^\/orders\/[^/]+\/status$/)) {
       const handled = await handleOrderStatusRequest(req, res);
       if (handled) return;
+      const paymentHandled = await handlePaymentStatusRequest(req, res);
+      if (paymentHandled) return;
     }
     if ((req.url ?? "/").startsWith("/customers")) {
       const handled = await handleCustomersRequest(req, res);
