@@ -57,6 +57,7 @@ export default function Dashboard() {
           <a href="/segments">Segments</a>
           <a href="/products">Products</a>
           <a href="/inventory">Inventory</a>
+          <a href="/analytics">Analytics</a>
           <a href="/audit-logs">Audit logs</a>
           <a href="/automations">Automations</a>
         </nav>

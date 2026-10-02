@@ -94,6 +94,58 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     }
     if (url.pathname === "/me" && req.method === "GET") { const user = await prisma.user.findFirst({ where: { id: context.auth!.userId, tenantId }, select: { id: true, email: true, name: true, role: true, tenant: { select: { id: true, name: true, slug: true } } } }); return user ? json(res, 200, user) : json(res, 404, { error: "user_not_found" }); }
     if (url.pathname === "/dashboard" && req.method === "GET") { const [stores, products, orders, customers, revenue] = await Promise.all([prisma.store.count({ where: { tenantId } }), prisma.product.count({ where: { store: { tenantId }, status: "ACTIVE" } }), prisma.order.count({ where: { tenantId } }), prisma.customer.count({ where: { tenantId } }), prisma.order.aggregate({ where: { tenantId, paymentStatus: "PAID" }, _sum: { total: true } })]); return json(res, 200, { stores, products, orders, customers, revenue: revenue._sum.total?.toString() ?? "0" }); }
+    if (url.pathname === "/analytics" && req.method === "GET") {
+      const requestedDays = Number(url.searchParams.get("days") ?? 30);
+      const days = Number.isFinite(requestedDays) ? Math.min(90, Math.max(7, Math.floor(requestedDays))) : 30;
+      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+      const [orders, customers, revenue, statusRows, productRows, dailyRows] = await Promise.all([
+        prisma.order.count({ where: { tenantId, createdAt: { gte: since } } }),
+        prisma.customer.count({ where: { tenantId, createdAt: { gte: since } } }),
+        prisma.order.aggregate({ where: { tenantId, createdAt: { gte: since }, paymentStatus: "PAID" }, _sum: { total: true } }),
+        prisma.order.groupBy({ by: ["status"], where: { tenantId, createdAt: { gte: since } }, _count: { _all: true } }),
+        prisma.orderItem.groupBy({ by: ["productId"], where: { order: { tenantId, createdAt: { gte: since } } }, _sum: { quantity: true, total: true }, orderBy: { _sum: { total: "desc" } }, take: 10 }),
+        prisma.$queryRaw<Array<{ day: Date; orders: bigint; revenue: unknown }>>`
+          SELECT DATE_TRUNC('day', "createdAt") AS day,
+                 COUNT(*)::bigint AS orders,
+                 COALESCE(SUM(CASE WHEN "paymentStatus" = 'PAID' THEN total ELSE 0 END), 0) AS revenue
+          FROM "Order"
+          WHERE "tenantId" = ${tenantId} AND "createdAt" >= ${since}
+          GROUP BY DATE_TRUNC('day', "createdAt")
+          ORDER BY day ASC
+        `,
+      ]);
+
+      const productIds = productRows.map(row => row.productId);
+      const products = productIds.length
+        ? await prisma.product.findMany({ where: { id: { in: productIds }, store: { tenantId } }, select: { id: true, name: true } })
+        : [];
+      const productNames = new Map(products.map(product => [product.id, product.name]));
+      const paidRevenue = Number(revenue._sum.total ?? 0);
+
+      return json(res, 200, {
+        days,
+        since,
+        summary: {
+          orders,
+          customers,
+          revenue: paidRevenue.toFixed(2),
+          averageOrderValue: orders ? (paidRevenue / orders).toFixed(2) : "0.00",
+        },
+        orderStatuses: statusRows.map(row => ({ status: row.status, count: row._count._all })),
+        topProducts: productRows.map(row => ({
+          productId: row.productId,
+          name: productNames.get(row.productId) ?? "Unknown product",
+          units: row._sum.quantity ?? 0,
+          revenue: Number(row._sum.total ?? 0).toFixed(2),
+        })),
+        daily: dailyRows.map(row => ({
+          date: row.day.toISOString().slice(0, 10),
+          orders: Number(row.orders),
+          revenue: Number(row.revenue ?? 0).toFixed(2),
+        })),
+      });
+    }
     if (url.pathname === "/stores" && req.method === "GET") return json(res, 200, await prisma.store.findMany({ where: { tenantId }, orderBy: { createdAt: "desc" } }));
     if (url.pathname === "/stores" && req.method === "POST") { requireRole(context, "OWNER", "ADMIN"); const input = await body(req); if (!input.name) return json(res, 400, { error: "name is required" }); const slug = slugify(input.slug ?? input.name); if (!slug) return json(res, 400, { error: "valid slug is required" }); const createdStore = await prisma.store.create({ data: { tenantId, name: input.name, slug, currency: input.currency ?? "PKR" } });
       await audit(tenantId, context.auth!.userId, "STORE_CREATED", "Store", createdStore.id, req, { name: createdStore.name });
