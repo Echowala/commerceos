@@ -45,7 +45,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       const tenantSlug = decodeURIComponent(publicStoreMatch[1]); const storeSlug = decodeURIComponent(publicStoreMatch[2]);
       const store = await prisma.store.findFirst({ where: { slug: storeSlug, tenant: { slug: tenantSlug } }, select: { id: true, name: true, slug: true, currency: true, tenant: { select: { slug: true } }, products: { where: { status: "ACTIVE" }, include: { variants: { select: { id: true, sku: true, price: true, stock: true } } }, orderBy: { createdAt: "desc" } } } });
       if (!store) return json(res, 404, { error: "store_not_found" });
-      return json(res, 200, { ...store, products: store.products.map(product => ({ ...product, variants: product.variants.map(variant => ({ id: variant.id, sku: variant.sku, price: variant.price.toString(), inStock: variant.stock > 0 })) })) });
+      return json(res, 200, { ...store, products: store.products.map(product => ({ ...product, variants: product.variants.map(variant => ({ id: variant.id, sku: variant.sku, price: variant.price.toString(), stock: variant.stock })) })) });
     }
     const publicCheckoutMatch = url.pathname.match(/^\/public\/stores\/([^/]+)\/([^/]+)\/orders$/);
     if (publicCheckoutMatch && req.method === "POST") {
