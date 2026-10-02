@@ -6,7 +6,7 @@ import { signup } from "./signup.js";
 import { createPublicOrder } from "./public-checkout.js";
 import { recordInventoryMovement } from "./inventory.js";
 import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
-import { triggerInventoryLowAutomation, triggerOrderPlacedAutomation, triggerOrderStatusChangedAutomation } from "./automation-hooks.js";
+import { triggerInventoryLowAutomation, triggerOrderPlacedAutomation } from "./automation-hooks.js";
 import { audit } from "./audit.js";
 
 const json = (res: ServerResponse, status: number, body: unknown) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.end(JSON.stringify(body)); };
@@ -164,92 +164,6 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (url.pathname === "/customers" && req.method === "POST") { requireRole(context, "OWNER", "ADMIN"); const input = await body(req); const email = input.email ? String(input.email).trim().toLowerCase() : null; if (!email) return json(res, 400, { error: "email is required" }); const existing = await prisma.customer.findFirst({ where: { tenantId, email } }); if (existing) return json(res, 409, { error: "customer_exists" }); const customer = await prisma.customer.create({ data: { tenantId, email, firstName: input.firstName ? String(input.firstName).trim() : null, lastName: input.lastName ? String(input.lastName).trim() : null, phone: input.phone ? String(input.phone).trim() : null } }); await audit(tenantId, context.auth!.userId, "CUSTOMER_CREATED", "Customer", customer.id, req); return json(res, 201, customer); }
     if (customerMatch && req.method === "PATCH") { requireRole(context, "OWNER", "ADMIN"); const input = await body(req); const customer = await prisma.customer.findFirst({ where: { id: customerMatch[1], tenantId } }); if (!customer) return json(res, 404, { error: "customer_not_found" }); const data: { email?: string; firstName?: string | null; lastName?: string | null; phone?: string | null } = {}; if (input.email !== undefined) { const email = String(input.email).trim().toLowerCase(); if (!email) return json(res, 400, { error: "email cannot be empty" }); data.email = email; } if (input.firstName !== undefined) data.firstName = input.firstName == null ? null : String(input.firstName).trim(); if (input.lastName !== undefined) data.lastName = input.lastName == null ? null : String(input.lastName).trim(); if (input.phone !== undefined) data.phone = input.phone == null ? null : String(input.phone).trim(); try { const updated = await prisma.customer.update({ where: { id: customer.id }, data }); await audit(tenantId, context.auth!.userId, "CUSTOMER_UPDATED", "Customer", updated.id, req, { fields: Object.keys(data) }); return json(res, 200, updated); } catch (error) { if (error instanceof Error && error.message.includes("Customer_tenantId_email_key")) return json(res, 409, { error: "customer_exists" }); throw error; } }
     if (url.pathname === "/orders" && req.method === "GET") { const requestedPage = Number(url.searchParams.get("page") ?? 1); const page = Number.isFinite(requestedPage) ? Math.min(10000, Math.max(1, Math.floor(requestedPage))) : 1; const requestedPageSize = Number(url.searchParams.get("pageSize") ?? 25); const pageSize = Number.isFinite(requestedPageSize) ? Math.min(100, Math.max(1, Math.floor(requestedPageSize))) : 25; const where = { tenantId }; const [items, total] = await Promise.all([prisma.order.findMany({ where, include: { customer: true, store: true, items: true }, orderBy: { createdAt: "desc" }, skip: (page - 1) * pageSize, take: pageSize }), prisma.order.count({ where })]); return json(res, 200, { items, total, page, pageSize, totalPages: Math.ceil(total / pageSize) }); }
-    const orderStatusMatch = url.pathname.match(/^\/orders\/([^/]+)\/status$/);
-    if (orderStatusMatch && req.method === "PATCH") {
-      requireRole(context, "OWNER", "ADMIN");
-      const input = await body(req);
-      const nextStatus = String(input.status ?? "");
-      if (!orderStatuses.includes(nextStatus as typeof orderStatuses[number])) return json(res, 400, { error: "invalid_order_status" });
-
-      const terminalStatuses = new Set(["CANCELLED", "REFUNDED"]);
-      const result = await prisma.$transaction(async tx => {
-        const order = await tx.order.findFirst({
-          where: { id: orderStatusMatch[1], tenantId },
-          include: { items: true },
-        });
-        if (!order) throw new Error("ORDER_NOT_FOUND");
-        if (order.status === nextStatus) return { order, released: false };
-
-        if (terminalStatuses.has(order.status) && !terminalStatuses.has(nextStatus)) {
-          throw new Error("TERMINAL_ORDER");
-        }
-
-        let released = false;
-        if (terminalStatuses.has(nextStatus) && !order.inventoryReleasedAt) {
-          for (const item of order.items) {
-            const variant = await tx.productVariant.findUnique({ where: { id: item.variantId } });
-            if (!variant) throw new Error("ORDER_VARIANT_NOT_FOUND");
-            const nextStock = variant.stock + item.quantity;
-            const updatedCount = await tx.productVariant.updateMany({
-              where: { id: variant.id, stock: variant.stock },
-              data: { stock: { increment: item.quantity } },
-            });
-            if (updatedCount.count !== 1) throw new Error("INVENTORY_CONFLICT");
-            await recordInventoryMovement(tx, {
-              tenantId,
-              productId: item.productId,
-              variantId: item.variantId,
-              type: "RETURN",
-              quantity: item.quantity,
-              stockBefore: variant.stock,
-              stockAfter: nextStock,
-              reason: `Order ${nextStatus.toLowerCase()}`,
-              referenceId: order.id,
-              createdByUserId: context.auth!.userId,
-            });
-          }
-          released = true;
-        }
-
-        const updated = await tx.order.update({
-          where: { id: order.id },
-          data: {
-            status: nextStatus as typeof orderStatuses[number],
-            ...(released ? { inventoryReleasedAt: new Date() } : {}),
-          },
-          include: { customer: true, store: true, items: true },
-        });
-
-        if (updated.customerId) {
-          await tx.customerEvent.create({
-            data: {
-              tenantId,
-              customerId: updated.customerId,
-              type: "ORDER_STATUS_CHANGED",
-              data: { orderId: updated.id, orderNumber: updated.orderNumber, from: order.status, to: updated.status },
-            },
-          });
-        }
-
-        await triggerOrderStatusChangedAutomation({
-          tenantId,
-          customerId: updated.customerId,
-          orderId: updated.id,
-          orderNumber: updated.orderNumber,
-          from: order.status,
-          to: updated.status,
-        }, tx);
-
-        return { order: updated, released };
-      });
-
-      await audit(tenantId, context.auth!.userId, "ORDER_STATUS_CHANGED", "Order", result.order.id, req, {
-        orderNumber: result.order.orderNumber,
-        status: result.order.status,
-        inventoryReleased: result.released,
-      });
-      return json(res, 200, { status: result.order.status, order: result.order });
-    }
     const orderMatch = url.pathname.match(/^\/orders\/([^/]+)$/);
     if (orderMatch && req.method === "GET") { const order = await prisma.order.findFirst({ where: { id: orderMatch[1], tenantId }, include: { customer: true, store: true, items: true } }); return order ? json(res, 200, order) : json(res, 404, { error: "order_not_found" }); }
     if (url.pathname === "/orders" && req.method === "POST") { requireRole(context, "OWNER", "ADMIN");
@@ -300,9 +214,6 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (error instanceof Error && error.message === "TENANT_REQUIRED") return json(res, 401, { error: "tenant_required" });
     if (error instanceof Error && error.message === "STORE_NOT_FOUND") return json(res, 404, { error: "store_not_found" });
     if (error instanceof Error && error.message === "ITEMS_REQUIRED") return json(res, 400, { error: "items must contain between 1 and 100 entries" });
-    if (error instanceof Error && error.message === "ORDER_NOT_FOUND") return json(res, 404, { error: "order_not_found" });
-    if (error instanceof Error && error.message === "TERMINAL_ORDER") return json(res, 409, { error: "terminal_order", message: "A cancelled or refunded order cannot be reopened." });
-    if (error instanceof Error && error.message === "ORDER_VARIANT_NOT_FOUND") return json(res, 409, { error: "order_variant_not_found" });
     if (error instanceof Error && error.message === "SHIPPING_REQUIRED") return json(res, 400, { error: "shipping fields are required" });
     if (error instanceof Error && error.message === "INVALID_QUANTITY") return json(res, 400, { error: "quantity must be a positive integer" });
     if (error instanceof Error && error.message === "ITEM_NOT_FOUND") return json(res, 404, { error: "item_not_found" });
