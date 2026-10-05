@@ -114,6 +114,7 @@ model Tenant {
   automationJobs AutomationJob[]
   auditLogs AuditLog[]
   webhookEndpoints WebhookEndpoint[]
+  webhookDeliveries WebhookDelivery[]
 }
 
 model User {
