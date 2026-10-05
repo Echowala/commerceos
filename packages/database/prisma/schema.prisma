@@ -293,6 +293,7 @@ model Order {
   status OrderStatus @default(PENDING)
   paymentStatus PaymentStatus @default(PENDING)
   paymentMethod PaymentMethod @default(COD)
+  paymentReference String?
   subtotal Decimal @db.Decimal(12, 2)
   total Decimal @db.Decimal(12, 2)
   currency String @default("PKR")
