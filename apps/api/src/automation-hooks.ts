@@ -1,3 +1,4 @@
+import { queueWebhookEvent } from "./webhook-events.js";
 import { prisma } from "@commerceos/database";
 import type { Prisma } from "@prisma/client";
 
@@ -25,6 +26,7 @@ export const enqueueAutomationEvent = async (event: Event, db: Prisma.Transactio
 
 export const triggerOrderPlacedAutomation = async (event: { tenantId: string; customerId: string; orderId: string; orderNumber: string; total: string; currency: string }, db: Prisma.TransactionClient | typeof prisma = prisma) => {
   await enqueueAutomationEvent({ tenantId: event.tenantId, trigger: "ORDER_PLACED", eventId: `order:${event.orderId}:placed`, customerId: event.customerId, data: { orderId: event.orderId, orderNumber: event.orderNumber, total: Number(event.total), currency: event.currency } }, db);
+  await queueWebhookEvent({ tenantId: event.tenantId, eventId: `order:${event.orderId}:placed`, eventType: "ORDER_PLACED", payload: { orderId: event.orderId, orderNumber: event.orderNumber, total: Number(event.total), currency: event.currency } }, db);
 };
 
 export const triggerCustomerCreatedAutomation = async (event: { tenantId: string; customerId: string; email: string | null }, db: Prisma.TransactionClient | typeof prisma = prisma) => {
@@ -33,6 +35,7 @@ export const triggerCustomerCreatedAutomation = async (event: { tenantId: string
 
 export const triggerOrderStatusChangedAutomation = async (event: { tenantId: string; customerId: string | null; orderId: string; orderNumber: string; from: string; to: string }, db: Prisma.TransactionClient | typeof prisma = prisma) => {
   await enqueueAutomationEvent({ tenantId: event.tenantId, trigger: "ORDER_STATUS_CHANGED", eventId: `order:${event.orderId}:status:${event.from}:${event.to}`, customerId: event.customerId, data: { orderId: event.orderId, orderNumber: event.orderNumber, from: event.from, to: event.to } }, db);
+  await queueWebhookEvent({ tenantId: event.tenantId, eventId: `order:${event.orderId}:status:${event.from}:${event.to}`, eventType: "ORDER_STATUS_CHANGED", payload: { orderId: event.orderId, orderNumber: event.orderNumber, from: event.from, to: event.to } }, db);
 };
 
 export const triggerInventoryLowAutomation = async (event: { tenantId: string; productId: string; variantId: string; stock: number; threshold: number; referenceId?: string | null }, db: Prisma.TransactionClient | typeof prisma = prisma) => {
