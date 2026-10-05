@@ -266,6 +266,8 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (error instanceof Error && error.message === "TENANT_REQUIRED") return json(res, 401, { error: "tenant_required" });
     if (error instanceof Error && error.message === "STORE_NOT_FOUND") return json(res, 404, { error: "store_not_found" });
     if (error instanceof Error && error.message === "ITEMS_REQUIRED") return json(res, 400, { error: "items must contain between 1 and 100 entries" });
+    if (error instanceof Error && error.message === "INVALID_PAYMENT_METHOD") return json(res, 400, { error: "invalid_payment_method" });
+    if (error instanceof Error && error.message === "PAYMENT_REFERENCE_REQUIRED") return json(res, 400, { error: "payment_reference_required" });
     if (error instanceof Error && error.message === "SHIPPING_REQUIRED") return json(res, 400, { error: "shipping fields are required" });
     if (error instanceof Error && error.message === "INVALID_QUANTITY") return json(res, 400, { error: "quantity must be a positive integer" });
     if (error instanceof Error && error.message === "ITEM_NOT_FOUND") return json(res, 404, { error: "item_not_found" });
