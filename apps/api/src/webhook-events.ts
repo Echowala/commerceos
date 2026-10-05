@@ -1,4 +1,4 @@
-import { prisma } from "@commerceos/database";
+import { prisma, Prisma } from "@commerceos/database";
 import type { Prisma } from "@prisma/client";
 
 export const queueWebhookEvent = async (
