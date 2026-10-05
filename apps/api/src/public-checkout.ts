@@ -23,6 +23,8 @@ const checkoutFingerprint = (input: CheckoutInput) => createHash("sha256").updat
     address: String(input.shippingAddress ?? input.customer?.address ?? "").trim(),
   },
   items: [...input.items].map(item => ({ variantId: String(item.variantId ?? ""), quantity: Number(item.quantity) })).sort((a, b) => a.variantId.localeCompare(b.variantId) || a.quantity - b.quantity),
+  paymentMethod: String(input.paymentMethod ?? "COD"),
+  paymentReference: input.paymentReference ? String(input.paymentReference).trim() : null,
 })).digest("hex");
 
 type PublicOrderResult = {
