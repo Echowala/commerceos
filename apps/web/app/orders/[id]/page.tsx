@@ -9,6 +9,7 @@ type Order = {
   status: string;
   paymentStatus: string;
   paymentMethod: string;
+  paymentReference?: string | null;
   subtotal: string | number;
   total: string | number;
   currency: string;
@@ -114,7 +115,7 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
 
       <div className="cards">
         <div className="card"><div className="muted">Order total</div><div className="metric">{order.currency} {order.total}</div></div>
-        <div className="card"><div className="muted">Payment</div><div className="metric">{order.paymentStatus}</div><small className="muted">{order.paymentMethod}</small><select className="status-select" value={paymentStatus} disabled={paymentSaving} onChange={e => void updatePaymentStatus(e.target.value)}>{paymentStatuses.map(value => <option key={value} value={value}>{value}</option>)}</select></div>
+        <div className="card"><div className="muted">Payment</div><div className="metric">{order.paymentStatus}</div><small className="muted">{order.paymentMethod}</small>{order.paymentReference && <small className="muted">Ref: {order.paymentReference}</small>}<select className="status-select" value={paymentStatus} disabled={paymentSaving} onChange={e => void updatePaymentStatus(e.target.value)}>{paymentStatuses.map(value => <option key={value} value={value}>{value}</option>)}</select></div>
         <div className="card"><div className="muted">Customer</div><div className="metric">{customerName}</div><small className="muted">{order.customer?.email ?? "Guest checkout"}</small></div>
       </div>
 
