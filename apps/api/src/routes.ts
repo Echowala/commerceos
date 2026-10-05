@@ -94,6 +94,39 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     }
     if (url.pathname === "/me" && req.method === "GET") { const user = await prisma.user.findFirst({ where: { id: context.auth!.userId, tenantId }, select: { id: true, email: true, name: true, role: true, tenant: { select: { id: true, name: true, slug: true } } } }); return user ? json(res, 200, user) : json(res, 404, { error: "user_not_found" }); }
     if (url.pathname === "/dashboard" && req.method === "GET") { const [stores, products, orders, customers, revenue] = await Promise.all([prisma.store.count({ where: { tenantId } }), prisma.product.count({ where: { store: { tenantId }, status: "ACTIVE" } }), prisma.order.count({ where: { tenantId } }), prisma.customer.count({ where: { tenantId } }), prisma.order.aggregate({ where: { tenantId, paymentStatus: "PAID" }, _sum: { total: true } })]); return json(res, 200, { stores, products, orders, customers, revenue: revenue._sum.total?.toString() ?? "0" }); }
+    if (url.pathname === "/webhooks" && req.method === "GET") {
+      requireRole(context, "OWNER", "ADMIN");
+      const endpoints = await prisma.webhookEndpoint.findMany({
+        where: { tenantId },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, name: true, url: true, events: true, status: true, createdAt: true, updatedAt: true },
+      });
+      return json(res, 200, endpoints);
+    }
+
+    if (url.pathname === "/webhooks" && req.method === "POST") {
+      requireRole(context, "OWNER", "ADMIN");
+      const input = await body(req);
+      const name = String(input.name ?? "").trim();
+      const webhookUrl = String(input.url ?? "").trim();
+      const secret = String(input.secret ?? "").trim();
+      const events = Array.isArray(input.events) ? input.events.map(String).slice(0, 50) : [];
+      if (!name || !secret || events.length === 0) return json(res, 400, { error: "name, secret and at least one event are required" });
+      try { new URL(webhookUrl); } catch { return json(res, 400, { error: "invalid_webhook_url" }); }
+      if (!webhookUrl.startsWith("https://")) return json(res, 400, { error: "webhook_url_must_use_https" });
+      const created = await prisma.webhookEndpoint.create({ data: { tenantId, name, url: webhookUrl, secret, events } });
+      return json(res, 201, { id: created.id, name: created.name, url: created.url, events: created.events, status: created.status, createdAt: created.createdAt });
+    }
+
+    const webhookMatch = url.pathname.match(/^\/webhooks\/([^/]+)$/);
+    if (webhookMatch && req.method === "DELETE") {
+      requireRole(context, "OWNER", "ADMIN");
+      const existing = await prisma.webhookEndpoint.findFirst({ where: { id: webhookMatch[1], tenantId } });
+      if (!existing) return json(res, 404, { error: "webhook_not_found" });
+      await prisma.webhookEndpoint.delete({ where: { id: existing.id } });
+      return json(res, 200, { deleted: true });
+    }
+
     if (url.pathname === "/analytics" && req.method === "GET") {
       const requestedDays = Number(url.searchParams.get("days") ?? 30);
       const days = Number.isFinite(requestedDays) ? Math.min(90, Math.max(7, Math.floor(requestedDays))) : 30;

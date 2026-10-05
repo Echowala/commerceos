@@ -113,6 +113,8 @@ model Tenant {
   automationExecutions AutomationExecution[]
   automationJobs AutomationJob[]
   auditLogs AuditLog[]
+  webhookEndpoints WebhookEndpoint[]
+  webhookDeliveries WebhookDelivery[]
 }
 
 model User {
@@ -367,4 +369,42 @@ model AutomationJob {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   @@index([status, availableAt])
   @@index([tenantId, createdAt])
+}
+
+
+model WebhookEndpoint {
+  id String @id @default(cuid())
+  tenantId String
+  name String
+  url String
+  secret String
+  events Json
+  status String @default("ACTIVE")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+  @@unique([tenantId, name])
+  @@index([tenantId, status])
+}
+
+model WebhookDelivery {
+  id String @id @default(cuid())
+  tenantId String
+  endpointId String
+  eventId String
+  eventType String
+  payload Json
+  status String @default("QUEUED")
+  attempts Int @default(0)
+  availableAt DateTime @default(now())
+  deliveredAt DateTime?
+  lastError String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  @@unique([endpointId, eventId])
+  @@index([tenantId, status, availableAt])
+  @@index([endpointId, createdAt])
 }
