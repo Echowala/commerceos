@@ -11,6 +11,8 @@ type CheckoutInput = {
   shippingPhone?: unknown;
   shippingAddress?: unknown;
   items: CheckoutItem[];
+  paymentMethod?: unknown;
+  paymentReference?: unknown;
 };
 
 const checkoutFingerprint = (input: CheckoutInput) => createHash("sha256").update(JSON.stringify({
@@ -38,6 +40,10 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
 
   const store = await prisma.store.findFirst({ where: { slug: storeSlug, tenant: { slug: tenantSlug } } });
   if (!store) throw new Error("STORE_NOT_FOUND");
+  const paymentMethod = String(input.paymentMethod ?? "COD");
+  if (paymentMethod !== "COD" && paymentMethod !== "MANUAL_BANK") throw new Error("INVALID_PAYMENT_METHOD");
+  const paymentReference = input.paymentReference ? String(input.paymentReference).trim().slice(0, 120) : null;
+  if (paymentMethod === "MANUAL_BANK" && !paymentReference) throw new Error("PAYMENT_REFERENCE_REQUIRED");
   const fingerprint = idempotencyKey ? checkoutFingerprint(input) : null;
 
   if (idempotencyKey) {
@@ -86,7 +92,7 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
         movements.push({ productId: variant.productId, variantId: variant.id, quantity: -quantity, stockBefore: variant.stock, stockAfter, crossedIntoLowStock: variant.stock > 5 && stockAfter > 0 && stockAfter <= 5 });
         subtotal += total;
       }
-      const order = await tx.order.create({ data: { tenantId: store.tenantId, storeId: store.id, customerId: customer.id, orderNumber: orderNumber(), idempotencyKey, idempotencyFingerprint: fingerprint, status: "CONFIRMED", paymentStatus: "PENDING", paymentMethod: "COD", subtotal, total: subtotal, currency: store.currency, shippingName, shippingPhone, shippingAddress, items: { create: orderItems } } });
+      const order = await tx.order.create({ data: { tenantId: store.tenantId, storeId: store.id, customerId: customer.id, orderNumber: orderNumber(), idempotencyKey, idempotencyFingerprint: fingerprint, status: "CONFIRMED", paymentStatus: "PENDING", paymentMethod: paymentMethod as "COD" | "MANUAL_BANK", subtotal, total: subtotal, currency: store.currency, shippingName, shippingPhone, shippingAddress, items: { create: orderItems } } });
       await tx.inventoryMovement.createMany({ data: movements.map(movement => ({ tenantId: store.tenantId, productId: movement.productId, variantId: movement.variantId, type: "SALE", quantity: movement.quantity, stockBefore: movement.stockBefore, stockAfter: movement.stockAfter, referenceId: order.id, reason: `Order ${order.orderNumber}` })) });
       await tx.customerEvent.createMany({ data: [
         ...(customerCreated ? [{ tenantId: store.tenantId, customerId: customer.id, type: "CUSTOMER_CREATED" as const, data: { source: "public_checkout" } }] : []),
@@ -104,6 +110,8 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
 
     return { order: result.order, replayed: result.replayed };
   } catch (error) {
+    if (error instanceof Error && error.message === "INVALID_PAYMENT_METHOD") throw error;
+    if (error instanceof Error && error.message === "PAYMENT_REFERENCE_REQUIRED") throw error;
     if (idempotencyKey && error instanceof Error && error.message.includes("Order_storeId_idempotencyKey_key")) {
       const existing = await prisma.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
       if (existing) {
