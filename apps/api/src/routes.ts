@@ -20,7 +20,7 @@ const stockReleasingStatuses = new Set(["CANCELLED", "REFUNDED"]);
 export const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   res.setHeader("access-control-allow-origin", process.env.WEB_ORIGIN ?? "http://localhost:3000");
   res.setHeader("access-control-allow-headers", "content-type, authorization, idempotency-key");
-  res.setHeader("access-control-allow-methods", "GET, POST, PATCH, OPTIONS");
+  res.setHeader("access-control-allow-methods", "GET, POST, PATCH, DELETE, OPTIONS");
   if (req.method === "OPTIONS") return json(res, 204, null);
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("x-frame-options", "DENY");
@@ -102,6 +102,26 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
         select: { id: true, name: true, url: true, events: true, status: true, createdAt: true, updatedAt: true },
       });
       return json(res, 200, endpoints);
+    }
+
+    if (url.pathname === "/webhooks/deliveries" && req.method === "GET") {
+      requireRole(context, "OWNER", "ADMIN");
+      const requestedLimit = Number(url.searchParams.get("limit") ?? 50);
+      const limit = Number.isFinite(requestedLimit) ? Math.min(100, Math.max(1, Math.floor(requestedLimit))) : 50;
+      const requestedPage = Number(url.searchParams.get("page") ?? 1);
+      const page = Number.isFinite(requestedPage) ? Math.min(10000, Math.max(1, Math.floor(requestedPage))) : 1;
+      const status = url.searchParams.get("status");
+      const allowedStatuses = ["QUEUED", "DELIVERING", "DELIVERED", "FAILED"];
+      if (status && !allowedStatuses.includes(status)) return json(res, 400, { error: "invalid_delivery_status" });
+      const where = { tenantId, ...(status ? { status } : {}) };
+      const [items, total] = await Promise.all([
+        prisma.webhookDelivery.findMany({
+          where, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit,
+          select: { id: true, endpointId: true, eventId: true, eventType: true, status: true, attempts: true, availableAt: true, deliveredAt: true, lastError: true, createdAt: true, endpoint: { select: { name: true } } },
+        }),
+        prisma.webhookDelivery.count({ where }),
+      ]);
+      return json(res, 200, { items, total, page, limit, totalPages: Math.ceil(total / limit) });
     }
 
     if (url.pathname === "/webhooks" && req.method === "POST") {
