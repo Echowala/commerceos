@@ -24,3 +24,15 @@ table { width: 100%; border-collapse: collapse; text-align: left; } .table-wrap 
 .quantity-control button:hover { background: #f2f4f7; }
 .quantity-control span { min-width: 18px; text-align: center; font-size: 14px; font-weight: 600; }
 @media (max-width: 640px) { .product-row-actions { gap: 10px; } }
+
+.webhook-notice { background: #ecfdf5; color: #047857; border-radius: 8px; padding: 10px; font-size: 14px; }
+.webhook-events { display: grid; gap: 9px; margin: 0; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; }
+.webhook-events legend { padding: 0 5px; font-size: 14px; font-weight: 700; }
+.webhook-check { display: flex !important; align-items: center; gap: 9px !important; font-weight: 500 !important; }
+.webhook-check input { width: auto; }
+.webhook-endpoint { display: flex; justify-content: space-between; gap: 16px; padding: 16px 0; border-top: 1px solid #eef2f7; }
+.webhook-endpoint-main { display: grid; gap: 6px; min-width: 0; }
+.webhook-url { overflow-wrap: anywhere; }
+.webhook-endpoint-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.webhook-error { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 600px) { .webhook-endpoint { align-items: flex-start; flex-direction: column; } .webhook-endpoint-actions { width: 100%; justify-content: space-between; } }
