@@ -138,7 +138,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       return json(res, 201, { id: created.id, name: created.name, url: created.url, events: created.events, status: created.status, createdAt: created.createdAt });
     }
 
-    const retryDeliveryMatch = url.pathname.match(/^\\/webhooks\\/deliveries\\/([^/]+)\\/retry$/);
+    const retryDeliveryMatch = url.pathname.match(/^\/webhooks\/deliveries\/([^/]+)\/retry$/);
     if (retryDeliveryMatch && req.method === "POST") {
       requireRole(context, "OWNER", "ADMIN");
       const delivery = await prisma.webhookDelivery.findFirst({
