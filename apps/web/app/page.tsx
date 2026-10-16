@@ -60,6 +60,7 @@ export default function Dashboard() {
           <a href="/analytics">Analytics</a>
           <a href="/audit-logs">Audit logs</a>
           <a href="/automations">Automations</a>
+          <a href="/webhooks">Webhooks</a>
         </nav>
         <button className="logout" onClick={logout}>Log out</button>
       </aside>
