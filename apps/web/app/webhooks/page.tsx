@@ -20,6 +20,7 @@ export default function WebhooksPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [retryingId, setRetryingId] = useState("");
 
   const loadEndpoints = useCallback(async () => {
     setEndpoints(await api<Endpoint[]>("/webhooks"));
@@ -59,6 +60,16 @@ export default function WebhooksPage() {
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to delete endpoint"); }
   };
 
+  const retryDelivery = async (delivery: Delivery) => {
+    setRetryingId(delivery.id); setError(""); setNotice("");
+    try {
+      await api<{ queued: boolean }>(`/webhooks/deliveries/${delivery.id}/retry`, { method: "POST" });
+      setNotice("Failed delivery queued for a fresh attempt.");
+      await loadDeliveries();
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to retry delivery"); }
+    finally { setRetryingId(""); }
+  };
+
   const toggleEvent = (eventName: string) => setEvents(current => current.includes(eventName) ? current.filter(item => item !== eventName) : [...current, eventName]);
 
   return (
@@ -91,7 +102,7 @@ export default function WebhooksPage() {
         </div>
         <section className="section">
           <div className="detail-header"><div><h2>Delivery history</h2><p className="muted">{total} matching delivery{total === 1 ? "" : "ies"} · latest 50</p></div><select className="status-select" aria-label="Filter deliveries by status" value={status} onChange={e => setStatus(e.target.value)}><option value="">All statuses</option><option value="QUEUED">Queued</option><option value="DELIVERING">Delivering</option><option value="DELIVERED">Delivered</option><option value="FAILED">Failed</option></select></div>
-          {deliveries.length === 0 ? <p className="muted">No deliveries match this filter yet. Deliveries appear when configured events occur.</p> : <div className="table-wrap"><table><thead><tr><th>Endpoint</th><th>Event</th><th>Status</th><th>Attempts</th><th>Created</th><th>Delivered</th><th>Last error</th></tr></thead><tbody>{deliveries.map(delivery => <tr key={delivery.id}><td>{delivery.endpoint.name}</td><td><span title={delivery.eventId}>{delivery.eventType}</span></td><td><span className="badge">{delivery.status}</span></td><td>{delivery.attempts}</td><td>{new Date(delivery.createdAt).toLocaleString()}</td><td>{delivery.deliveredAt ? new Date(delivery.deliveredAt).toLocaleString() : "—"}</td><td className="webhook-error" title={delivery.lastError ?? ""}>{delivery.lastError ?? "—"}</td></tr>)}</tbody></table></div>}
+          {deliveries.length === 0 ? <p className="muted">No deliveries match this filter yet. Deliveries appear when configured events occur.</p> : <div className="table-wrap"><table><thead><tr><th>Endpoint</th><th>Event</th><th>Status</th><th>Attempts</th><th>Created</th><th>Delivered</th><th>Last error</th><th>Action</th></tr></thead><tbody>{deliveries.map(delivery => <tr key={delivery.id}><td>{delivery.endpoint.name}</td><td><span title={delivery.eventId}>{delivery.eventType}</span></td><td><span className="badge">{delivery.status}</span></td><td>{delivery.attempts}</td><td>{new Date(delivery.createdAt).toLocaleString()}</td><td>{delivery.deliveredAt ? new Date(delivery.deliveredAt).toLocaleString() : "—"}</td><td className="webhook-error" title={delivery.lastError ?? ""}>{delivery.lastError ?? "—"}</td><td>{delivery.status === "FAILED" ? <button className="secondary-button" type="button" disabled={Boolean(retryingId)} onClick={() => void retryDelivery(delivery)}>{retryingId === delivery.id ? "Queueing…" : "Retry"}</button> : "—"}</td></tr>)}</tbody></table></div>}
         </section>
       </section>
     </main>
