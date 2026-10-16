@@ -138,6 +138,25 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       return json(res, 201, { id: created.id, name: created.name, url: created.url, events: created.events, status: created.status, createdAt: created.createdAt });
     }
 
+    const retryDeliveryMatch = url.pathname.match(/^\\/webhooks\\/deliveries\\/([^/]+)\\/retry$/);
+    if (retryDeliveryMatch && req.method === "POST") {
+      requireRole(context, "OWNER", "ADMIN");
+      const delivery = await prisma.webhookDelivery.findFirst({
+        where: { id: retryDeliveryMatch[1], tenantId },
+        select: { id: true, status: true, endpoint: { select: { status: true } } },
+      });
+      if (!delivery) return json(res, 404, { error: "webhook_delivery_not_found" });
+      if (delivery.status !== "FAILED") return json(res, 409, { error: "delivery_not_failed" });
+      if (delivery.endpoint.status !== "ACTIVE") return json(res, 409, { error: "webhook_endpoint_inactive" });
+      const retried = await prisma.webhookDelivery.updateMany({
+        where: { id: delivery.id, tenantId, status: "FAILED" },
+        data: { status: "QUEUED", attempts: 0, availableAt: new Date(), deliveredAt: null, lastError: null },
+      });
+      if (retried.count !== 1) return json(res, 409, { error: "delivery_state_changed" });
+      await audit(tenantId, context.auth!.userId, "WEBHOOK_DELIVERY_RETRIED", "WebhookDelivery", delivery.id, req);
+      return json(res, 200, { queued: true, id: delivery.id });
+    }
+
     const webhookMatch = url.pathname.match(/^\/webhooks\/([^/]+)$/);
     if (webhookMatch && req.method === "DELETE") {
       requireRole(context, "OWNER", "ADMIN");
