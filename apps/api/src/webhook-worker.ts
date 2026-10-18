@@ -15,7 +15,14 @@ export const getWebhookRetryDelay = (attempt: number) =>
 const signPayload = (secret: string, payload: string) =>
   crypto.createHmac("sha256", secret).update(payload).digest("hex");
 
-const nextRetry = (attempt: number) => new Date(Date.now() + getWebhookRetryDelay(attempt));
+const nextRetry = (attempt: number, now: () => Date = () => new Date()) => new Date(now().getTime() + getWebhookRetryDelay(attempt));
+
+export type WebhookWorkerDependencies = {
+  db?: typeof prisma;
+  fetchImpl?: typeof fetch;
+  validateTarget?: typeof validateWebhookTarget;
+  now?: () => Date;
+};
 
 const isPrivateAddress = (address: string) => {
   if (isIP(address) === 4) {
@@ -60,15 +67,19 @@ export const validateWebhookTarget = async (rawUrl: string) => {
   return target.toString();
 };
 
-export const deliverWebhook = async (deliveryId: string) => {
+export const deliverWebhook = async (deliveryId: string, dependencies: WebhookWorkerDependencies = {}) => {
+  const db = dependencies.db ?? prisma;
+  const fetchImpl = dependencies.fetchImpl ?? fetch;
+  const validateTarget = dependencies.validateTarget ?? validateWebhookTarget;
+  const now = dependencies.now ?? (() => new Date());
   // Atomic claim prevents two queue workers from sending the same queued delivery.
-  const claimed = await prisma.webhookDelivery.updateMany({
-    where: { id: deliveryId, status: "QUEUED", availableAt: { lte: new Date() } },
+  const claimed = await db.webhookDelivery.updateMany({
+    where: { id: deliveryId, status: "QUEUED", availableAt: { lte: now() } },
     data: { status: "DELIVERING", attempts: { increment: 1 } },
   });
   if (claimed.count !== 1) return null;
 
-  const delivery = await prisma.webhookDelivery.findUnique({
+  const delivery = await db.webhookDelivery.findUnique({
     where: { id: deliveryId },
     include: { endpoint: true },
   });
@@ -76,10 +87,10 @@ export const deliverWebhook = async (deliveryId: string) => {
 
   const attempt = delivery.attempts;
   try {
-    const target = await validateWebhookTarget(delivery.endpoint.url);
+    const target = await validateTarget(delivery.endpoint.url);
     const payload = JSON.stringify(delivery.payload);
     // Do not follow redirects: they could redirect an approved URL to a private host.
-    const response = await fetch(target, {
+    const response = await fetchImpl(target, {
       method: "POST",
       redirect: "error",
       headers: {
@@ -98,27 +109,29 @@ export const deliverWebhook = async (deliveryId: string) => {
     }
     await response.body?.cancel().catch(() => undefined);
 
-    return await prisma.webhookDelivery.update({
+    return await db.webhookDelivery.update({
       where: { id: delivery.id },
-      data: { status: "DELIVERED", deliveredAt: new Date(), availableAt: new Date(), lastError: null },
+      data: { status: "DELIVERED", deliveredAt: now(), availableAt: now(), lastError: null },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 500) : "Webhook delivery failed";
     const terminal = attempt >= MAX_ATTEMPTS;
-    return await prisma.webhookDelivery.update({
+    return await db.webhookDelivery.update({
       where: { id: delivery.id },
       data: {
         status: terminal ? "FAILED" : "QUEUED",
-        availableAt: terminal ? new Date() : nextRetry(attempt),
+        availableAt: terminal ? now() : nextRetry(attempt, now),
         lastError: message,
       },
     });
   }
 };
 
-export const recoverStuckWebhookDeliveries = async (staleAfterMs = STALE_DELIVERY_MS) => {
-  const staleBefore = new Date(Date.now() - Math.max(60_000, staleAfterMs));
-  const staleDeliveries = await prisma.webhookDelivery.findMany({
+export const recoverStuckWebhookDeliveries = async (staleAfterMs = STALE_DELIVERY_MS, dependencies: WebhookWorkerDependencies = {}) => {
+  const db = dependencies.db ?? prisma;
+  const now = dependencies.now ?? (() => new Date());
+  const staleBefore = new Date(now().getTime() - Math.max(60_000, staleAfterMs));
+  const staleDeliveries = await db.webhookDelivery.findMany({
     where: { status: "DELIVERING", updatedAt: { lte: staleBefore } },
     select: { id: true, attempts: true, updatedAt: true },
     take: 100,
@@ -127,11 +140,11 @@ export const recoverStuckWebhookDeliveries = async (staleAfterMs = STALE_DELIVER
   let recovered = 0;
   for (const delivery of staleDeliveries) {
     const terminal = delivery.attempts >= MAX_ATTEMPTS;
-    const result = await prisma.webhookDelivery.updateMany({
+    const result = await db.webhookDelivery.updateMany({
       where: { id: delivery.id, status: "DELIVERING", updatedAt: delivery.updatedAt },
       data: {
         status: terminal ? "FAILED" : "QUEUED",
-        availableAt: new Date(),
+        availableAt: now(),
         lastError: "Recovered stale delivery after worker interruption",
       },
     });
