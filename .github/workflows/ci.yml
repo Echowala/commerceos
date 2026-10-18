@@ -52,6 +52,9 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: API tests
+        run: pnpm --filter @commerceos/api test
+
       - name: Lint
         run: pnpm lint
 
