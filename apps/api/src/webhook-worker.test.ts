@@ -9,6 +9,7 @@ import {
   WEBHOOK_REQUEST_TIMEOUT_MS,
   validateWebhookTarget,
 } from "./webhook-worker.js";
+import type { WebhookWorkerDependencies } from "./webhook-worker.js";
 
 const fixedNow = new Date("2026-10-18T12:00:00.000Z");
 const clock = () => new Date(fixedNow);
@@ -30,7 +31,7 @@ const makeDelivery = (attempts = 1) => ({
   endpoint: { id: "endpoint-1", url: "https://hooks.example.test/receive", secret: "test-secret", status: "ACTIVE" },
 });
 
-const dependencies = (db: Record<string, unknown>, extras: Record<string, unknown> = {}) => ({
+const dependencies = (db: Record<string, unknown>, extras: Partial<WebhookWorkerDependencies> = {}): WebhookWorkerDependencies => ({
   db: db as never,
   validateTarget: async (url: string) => url,
   now: clock,
