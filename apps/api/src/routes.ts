@@ -138,7 +138,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       return json(res, 201, { id: created.id, name: created.name, url: created.url, events: created.events, status: created.status, createdAt: created.createdAt });
     }
 
-    const webhookPatchMatch = url.pathname.match(/^\\/webhooks\\/([^/]+)$/);
+    const webhookPatchMatch = url.pathname.match(/^\/webhooks\/([^/]+)$/);
     if (webhookPatchMatch && req.method === "PATCH") {
       requireRole(context, "OWNER", "ADMIN");
       const existing = await prisma.webhookEndpoint.findFirst({ where: { id: webhookPatchMatch[1], tenantId } });
