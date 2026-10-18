@@ -159,7 +159,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       }
       if (Object.prototype.hasOwnProperty.call(input, "events")) {
         if (!Array.isArray(input.events)) return json(res, 400, { error: "events_must_be_a_nonempty_array" });
-        const events = [...new Set(input.events.map((item: unknown) => String(item).trim()).filter(Boolean))].slice(0, 50);
+        const events: string[] = Array.from(new Set((input.events as unknown[]).map(item => String(item).trim()).filter(event => event.length > 0))).slice(0, 50);
         if (!events.length || events.some(event => !/^[A-Z][A-Z0-9_.*-]{0,99}$/.test(event))) return json(res, 400, { error: "events_must_be_a_nonempty_array_of_event_names" });
         data.events = events;
       }
