@@ -138,6 +138,47 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       return json(res, 201, { id: created.id, name: created.name, url: created.url, events: created.events, status: created.status, createdAt: created.createdAt });
     }
 
+    const webhookPatchMatch = url.pathname.match(/^\\/webhooks\\/([^/]+)$/);
+    if (webhookPatchMatch && req.method === "PATCH") {
+      requireRole(context, "OWNER", "ADMIN");
+      const existing = await prisma.webhookEndpoint.findFirst({ where: { id: webhookPatchMatch[1], tenantId } });
+      if (!existing) return json(res, 404, { error: "webhook_not_found" });
+      const input = await body(req);
+      const data: { name?: string; url?: string; events?: string[]; status?: string; secret?: string } = {};
+      if (Object.prototype.hasOwnProperty.call(input, "name")) {
+        const name = String(input.name ?? "").trim();
+        if (!name || name.length > 120) return json(res, 400, { error: "invalid_webhook_name" });
+        data.name = name;
+      }
+      if (Object.prototype.hasOwnProperty.call(input, "url")) {
+        const webhookUrl = String(input.url ?? "").trim();
+        let parsed: URL;
+        try { parsed = new URL(webhookUrl); } catch { return json(res, 400, { error: "invalid_webhook_url" }); }
+        if (parsed.protocol !== "https:" || parsed.username || parsed.password) return json(res, 400, { error: "webhook_url_must_use_https_without_credentials" });
+        data.url = parsed.toString();
+      }
+      if (Object.prototype.hasOwnProperty.call(input, "events")) {
+        if (!Array.isArray(input.events)) return json(res, 400, { error: "events_must_be_a_nonempty_array" });
+        const events = [...new Set(input.events.map((item: unknown) => String(item).trim()).filter(Boolean))].slice(0, 50);
+        if (!events.length || events.some(event => !/^[A-Z][A-Z0-9_.*-]{0,99}$/.test(event))) return json(res, 400, { error: "events_must_be_a_nonempty_array_of_event_names" });
+        data.events = events;
+      }
+      if (Object.prototype.hasOwnProperty.call(input, "status")) {
+        const status = String(input.status ?? "").trim().toUpperCase();
+        if (status !== "ACTIVE" && status !== "PAUSED") return json(res, 400, { error: "invalid_webhook_status" });
+        data.status = status;
+      }
+      if (Object.prototype.hasOwnProperty.call(input, "secret")) {
+        const secret = String(input.secret ?? "").trim();
+        if (secret.length < 8 || secret.length > 500) return json(res, 400, { error: "secret_must_be_between_8_and_500_characters" });
+        data.secret = secret;
+      }
+      if (!Object.keys(data).length) return json(res, 400, { error: "no_valid_fields_to_update" });
+      const updated = await prisma.webhookEndpoint.update({ where: { id: existing.id }, data });
+      await audit(tenantId, context.auth!.userId, "WEBHOOK_ENDPOINT_UPDATED", "WebhookEndpoint", existing.id, req);
+      return json(res, 200, { id: updated.id, name: updated.name, url: updated.url, events: updated.events, status: updated.status, createdAt: updated.createdAt, updatedAt: updated.updatedAt });
+    }
+
     const retryDeliveryMatch = url.pathname.match(/^\/webhooks\/deliveries\/([^/]+)\/retry$/);
     if (retryDeliveryMatch && req.method === "POST") {
       requireRole(context, "OWNER", "ADMIN");
