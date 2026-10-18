@@ -109,7 +109,7 @@ export const deliverWebhook = async (deliveryId: string) => {
 
 export const processWebhookQueue = async (limit = 25) => {
   const deliveries = await prisma.webhookDelivery.findMany({
-    where: { status: "QUEUED", availableAt: { lte: new Date() } },
+    where: { status: "QUEUED", availableAt: { lte: new Date() }, endpoint: { is: { status: "ACTIVE" } } },
     orderBy: { createdAt: "asc" },
     take: Math.min(100, Math.max(1, Math.floor(limit))),
     select: { id: true },

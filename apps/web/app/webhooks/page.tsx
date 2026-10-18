@@ -21,6 +21,12 @@ export default function WebhooksPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [retryingId, setRetryingId] = useState("");
+  const [editingId, setEditingId] = useState("");
+  const [editName, setEditName] = useState("");
+  const [editUrl, setEditUrl] = useState("");
+  const [editSecret, setEditSecret] = useState("");
+  const [editEvents, setEditEvents] = useState<string[]>([]);
+  const [updatingId, setUpdatingId] = useState("");
 
   const loadEndpoints = useCallback(async () => {
     setEndpoints(await api<Endpoint[]>("/webhooks"));
@@ -60,6 +66,39 @@ export default function WebhooksPage() {
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to delete endpoint"); }
   };
 
+  const beginEdit = (endpoint: Endpoint) => {
+    setEditingId(endpoint.id); setEditName(endpoint.name); setEditUrl(endpoint.url);
+    setEditSecret(""); setEditEvents(Array.isArray(endpoint.events) ? endpoint.events.map(String) : []);
+    setError(""); setNotice("");
+  };
+
+  const toggleEditEvent = (eventName: string) => setEditEvents(current => current.includes(eventName) ? current.filter(item => item !== eventName) : [...current, eventName]);
+
+  const updateEndpoint = async (event: React.FormEvent, endpoint: Endpoint) => {
+    event.preventDefault();
+    setUpdatingId(endpoint.id); setError(""); setNotice("");
+    try {
+      await api<Endpoint>(`/webhooks/${endpoint.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: editName.trim(), url: editUrl.trim(), events: editEvents, ...(editSecret.trim() ? { secret: editSecret.trim() } : {}) }),
+      });
+      setEditingId(""); setEditSecret("");
+      setNotice("Webhook endpoint updated. A replacement signing secret is never returned by the API.");
+      await loadEndpoints();
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to update endpoint"); }
+    finally { setUpdatingId(""); }
+  };
+
+  const toggleEndpointStatus = async (endpoint: Endpoint) => {
+    const nextStatus = endpoint.status === "ACTIVE" ? "PAUSED" : "ACTIVE";
+    setError(""); setNotice("");
+    try {
+      await api<Endpoint>(`/webhooks/${endpoint.id}`, { method: "PATCH", body: JSON.stringify({ status: nextStatus }) });
+      setNotice(nextStatus === "PAUSED" ? "Endpoint paused. New deliveries and queued delivery attempts are on hold." : "Endpoint activated.");
+      await loadEndpoints();
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to change endpoint status"); }
+  };
+
   const retryDelivery = async (delivery: Delivery) => {
     setRetryingId(delivery.id); setError(""); setNotice("");
     try {
@@ -96,7 +135,16 @@ export default function WebhooksPage() {
             <div className="detail-header"><div><h2>Configured endpoints</h2><p className="muted">{endpoints.length} endpoint{endpoints.length === 1 ? "" : "s"} in this workspace.</p></div></div>
             {endpoints.length === 0 ? <p className="muted">No webhook endpoints configured yet.</p> : endpoints.map(endpoint => {
               const selectedEvents = Array.isArray(endpoint.events) ? endpoint.events.map(String) : [];
-              return <div className="webhook-endpoint" key={endpoint.id}><div className="webhook-endpoint-main"><strong>{endpoint.name}</strong><span className="muted webhook-url">{endpoint.url}</span><span className="small muted">{selectedEvents.join(", ") || "No events"} · Created {new Date(endpoint.createdAt).toLocaleDateString()}</span></div><div className="webhook-endpoint-actions"><span className="badge">{endpoint.status}</span><button className="secondary-button" type="button" onClick={() => void removeEndpoint(endpoint)}>Delete</button></div></div>;
+              return <div className="webhook-endpoint-wrap" key={endpoint.id}>
+                <div className="webhook-endpoint"><div className="webhook-endpoint-main"><strong>{endpoint.name}</strong><span className="muted webhook-url">{endpoint.url}</span><span className="small muted">{selectedEvents.join(", ") || "No events"} · Created {new Date(endpoint.createdAt).toLocaleDateString()}</span></div><div className="webhook-endpoint-actions"><span className="badge">{endpoint.status}</span><button className="secondary-button" type="button" onClick={() => void toggleEndpointStatus(endpoint)}>{endpoint.status === "ACTIVE" ? "Pause" : "Activate"}</button><button className="secondary-button" type="button" onClick={() => editingId === endpoint.id ? setEditingId("") : beginEdit(endpoint)}>{editingId === endpoint.id ? "Cancel edit" : "Edit"}</button><button className="secondary-button" type="button" onClick={() => void removeEndpoint(endpoint)}>Delete</button></div></div>
+                {editingId === endpoint.id && <form className="segment-form webhook-edit-form" onSubmit={event => void updateEndpoint(event, endpoint)}>
+                  <label>Name<input value={editName} onChange={e => setEditName(e.target.value)} maxLength={120} required /></label>
+                  <label>HTTPS endpoint URL<input type="url" value={editUrl} onChange={e => setEditUrl(e.target.value)} required /></label>
+                  <label>Replace signing secret (optional)<input value={editSecret} onChange={e => setEditSecret(e.target.value)} type="password" autoComplete="new-password" minLength={8} maxLength={500} placeholder="Leave blank to keep current secret" /></label>
+                  <fieldset className="webhook-events"><legend>Events</legend>{eventOptions.map(eventName => <label className="webhook-check" key={eventName}><input type="checkbox" checked={editEvents.includes(eventName)} onChange={() => toggleEditEvent(eventName)} />{eventName}</label>)}</fieldset>
+                  <button className="primary-button" disabled={updatingId === endpoint.id || !editName.trim() || !editUrl.trim() || editEvents.length === 0}>{updatingId === endpoint.id ? "Saving…" : "Save changes"}</button>
+                </form>}
+              </div>;
             })}
           </section>
         </div>
