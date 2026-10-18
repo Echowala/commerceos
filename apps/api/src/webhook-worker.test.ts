@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { validateWebhookTarget } from "./webhook-worker.js";
+import { getWebhookRetryDelay, MAX_ATTEMPTS, WEBHOOK_REQUEST_TIMEOUT_MS, validateWebhookTarget } from "./webhook-worker.js";
 
 describe("webhook worker", () => {
   it("signs webhook payloads with HMAC SHA-256", () => {
@@ -9,14 +9,17 @@ describe("webhook worker", () => {
     assert.equal(signature.length, 64);
   });
 
-  it("uses bounded retries", () => {
-    const maxAttempts = 5;
-    assert.equal(maxAttempts, 5);
+  it("uses a bounded retry policy with increasing delays", () => {
+    assert.equal(MAX_ATTEMPTS, 5);
+    assert.equal(getWebhookRetryDelay(1), 60_000);
+    assert.equal(getWebhookRetryDelay(2), 300_000);
+    assert.equal(getWebhookRetryDelay(3), 900_000);
+    assert.equal(getWebhookRetryDelay(4), 3_600_000);
+    assert.equal(getWebhookRetryDelay(5), 3_600_000);
   });
 
   it("uses a ten second request timeout", () => {
-    const timeout = 10_000;
-    assert.equal(timeout, 10_000);
+    assert.equal(WEBHOOK_REQUEST_TIMEOUT_MS, 10_000);
   });
 
   it("rejects localhost webhook targets", async () => {
