@@ -131,6 +131,11 @@ describe("webhook worker", () => {
       "https://[::]/hook",
       "https://[ff02::1]/hook",
       "https://[2001:db8::1]/hook",
+      "https://[2001:2::1]/hook",
+      "https://[2001:10::1]/hook",
+      "https://[2001:20::1]/hook",
+      "https://[2002::1]/hook",
+      "https://[3fff::1]/hook",
     ];
     for (const target of blocked) {
       await assert.rejects(validateWebhookTarget(target), /public IP addresses/);
