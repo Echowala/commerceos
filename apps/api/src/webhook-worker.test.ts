@@ -32,7 +32,14 @@ const makeDelivery = (attempts = 1) => ({
 });
 
 const dependencies = (db: Record<string, unknown>, extras: Partial<WebhookWorkerDependencies> = {}): WebhookWorkerDependencies => ({
-  db: db as never,
+  db: {
+    ...db,
+    webhookDeliveryAttempt: (db as { webhookDeliveryAttempt?: unknown }).webhookDeliveryAttempt ?? {
+      create: async ({ data }: { data: Record<string, unknown> }) => ({ id: "attempt-1", ...data }),
+      update: async ({ data }: { data: Record<string, unknown> }) => data,
+      updateMany: async () => ({ count: 1 }),
+    },
+  } as never,
   validateTarget: async (url: string) => url,
   now: clock,
   ...extras,
@@ -145,6 +152,33 @@ describe("webhook worker", () => {
     assert.equal(updateData?.status, "FAILED");
     assert.equal(updateData?.lastError, "Webhook responded with HTTP 500");
     assert.equal((updateData?.availableAt as Date).getTime(), fixedNow.getTime());
+  });
+
+  it("persists an individual failed attempt with HTTP status and timing", async () => {
+    let attemptCreate: Record<string, unknown> | undefined;
+    let attemptUpdate: Record<string, unknown> | undefined;
+    const db = {
+      webhookDelivery: {
+        updateMany: async () => ({ count: 1 }),
+        findUnique: async () => makeDelivery(2),
+        update: async ({ data }: { data: Record<string, unknown> }) => data,
+      },
+      webhookDeliveryAttempt: {
+        create: async ({ data }: { data: Record<string, unknown> }) => { attemptCreate = data; return { id: "attempt-row-2" }; },
+        update: async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => { attemptUpdate = { ...where, ...data }; return data; },
+        updateMany: async () => ({ count: 1 }),
+      },
+    };
+    await deliverWebhook("delivery-1", dependencies(db, {
+      fetchImpl: async () => new Response(null, { status: 502 }),
+    }));
+    assert.equal(attemptCreate?.attemptNumber, 2);
+    assert.equal(attemptCreate?.status, "IN_PROGRESS");
+    assert.equal(attemptUpdate?.id, "attempt-row-2");
+    assert.equal(attemptUpdate?.status, "FAILED");
+    assert.equal(attemptUpdate?.httpStatus, 502);
+    assert.equal(attemptUpdate?.error, "Webhook responded with HTTP 502");
+    assert.equal(attemptUpdate?.durationMs, 0);
   });
 
   it("retries after a network exception and caps stored error text", async () => {

@@ -86,6 +86,11 @@ export const deliverWebhook = async (deliveryId: string, dependencies: WebhookWo
   if (!delivery) return null;
 
   const attempt = delivery.attempts;
+  const attemptStartedAt = now();
+  const attemptRecord = await db.webhookDeliveryAttempt.create({
+    data: { deliveryId: delivery.id, attemptNumber: attempt, status: "IN_PROGRESS", startedAt: attemptStartedAt },
+  });
+  let httpStatus: number | null = null;
   try {
     const target = await validateTarget(delivery.endpoint.url);
     const payload = JSON.stringify(delivery.payload);
@@ -103,24 +108,35 @@ export const deliverWebhook = async (deliveryId: string, dependencies: WebhookWo
       signal: AbortSignal.timeout(WEBHOOK_REQUEST_TIMEOUT_MS),
     });
 
+    httpStatus = response.status;
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
       throw new Error(`Webhook responded with HTTP ${response.status}`);
     }
     await response.body?.cancel().catch(() => undefined);
 
+    const finishedAt = now();
+    await db.webhookDeliveryAttempt.update({
+      where: { id: attemptRecord.id },
+      data: { status: "SUCCEEDED", httpStatus, finishedAt, durationMs: Math.max(0, finishedAt.getTime() - attemptStartedAt.getTime()) },
+    });
     return await db.webhookDelivery.update({
       where: { id: delivery.id },
-      data: { status: "DELIVERED", deliveredAt: now(), availableAt: now(), lastError: null },
+      data: { status: "DELIVERED", deliveredAt: finishedAt, availableAt: finishedAt, lastError: null },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 500) : "Webhook delivery failed";
     const terminal = attempt >= MAX_ATTEMPTS;
+    const finishedAt = now();
+    await db.webhookDeliveryAttempt.update({
+      where: { id: attemptRecord.id },
+      data: { status: "FAILED", httpStatus, error: message, finishedAt, durationMs: Math.max(0, finishedAt.getTime() - attemptStartedAt.getTime()) },
+    });
     return await db.webhookDelivery.update({
       where: { id: delivery.id },
       data: {
         status: terminal ? "FAILED" : "QUEUED",
-        availableAt: terminal ? now() : nextRetry(attempt, now),
+        availableAt: terminal ? finishedAt : nextRetry(attempt, () => finishedAt),
         lastError: message,
       },
     });
@@ -148,6 +164,12 @@ export const recoverStuckWebhookDeliveries = async (staleAfterMs = STALE_DELIVER
         lastError: "Recovered stale delivery after worker interruption",
       },
     });
+    if (result.count === 1) {
+      await db.webhookDeliveryAttempt.updateMany({
+        where: { deliveryId: delivery.id, attemptNumber: delivery.attempts, status: "IN_PROGRESS" },
+        data: { status: "INTERRUPTED", error: "Worker interrupted before attempt completed", finishedAt: now() },
+      });
+    }
     recovered += result.count;
   }
   return recovered;
