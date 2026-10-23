@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { prisma, Prisma } from "@commerceos/database";
 import { createToken, verifyPassword } from "./auth.js";
 import { signup } from "./signup.js";
@@ -8,6 +8,7 @@ import { recordInventoryMovement } from "./inventory.js";
 import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
 import { triggerInventoryLowAutomation, triggerOrderPlacedAutomation } from "./automation-hooks.js";
 import { audit } from "./audit.js";
+import { validateWebhookTarget, WEBHOOK_REQUEST_TIMEOUT_MS } from "./webhook-worker.js";
 
 const json = (res: ServerResponse, status: number, body: unknown) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.end(JSON.stringify(body)); };
 const body = async (req: IncomingMessage) => { let raw = ""; for await (const chunk of req) raw += chunk; if (raw.length > 1_000_000) throw new Error("PAYLOAD_TOO_LARGE"); return raw ? JSON.parse(raw) : {}; };
@@ -161,6 +162,46 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       return json(res, 201, { id: created.id, name: created.name, url: created.url, events: created.events, status: created.status, createdAt: created.createdAt });
     }
 
+    const webhookTestMatch = url.pathname.match(/^\/webhooks\/([^/]+)\/test$/);
+    if (webhookTestMatch && req.method === "POST") {
+      requireRole(context, "OWNER", "ADMIN");
+      const endpoint = await prisma.webhookEndpoint.findFirst({
+        where: { id: webhookTestMatch[1], tenantId },
+        select: { id: true, name: true, url: true, secret: true },
+      });
+      if (!endpoint) return json(res, 404, { error: "webhook_not_found" });
+      const eventId = `test_${randomBytes(12).toString("hex")}`;
+      const payload = JSON.stringify({
+        id: eventId,
+        type: "WEBHOOK_TEST",
+        createdAt: new Date().toISOString(),
+        data: { endpointId: endpoint.id, endpointName: endpoint.name, test: true },
+      });
+      try {
+        const target = await validateWebhookTarget(endpoint.url);
+        const response = await fetch(target, {
+          method: "POST",
+          redirect: "error",
+          headers: {
+            "content-type": "application/json",
+            "x-commerceos-event": "WEBHOOK_TEST",
+            "x-commerceos-event-id": eventId,
+            "x-commerceos-signature": `sha256=${createHmac("sha256", endpoint.secret).update(payload).digest("hex")}`,
+          },
+          body: payload,
+          signal: AbortSignal.timeout(WEBHOOK_REQUEST_TIMEOUT_MS),
+        });
+        await response.body?.cancel().catch(() => undefined);
+        const result = { ok: response.ok, httpStatus: response.status, error: response.ok ? null : `Webhook responded with HTTP ${response.status}` };
+        await audit(tenantId, context.auth!.userId, result.ok ? "WEBHOOK_ENDPOINT_TEST_SUCCEEDED" : "WEBHOOK_ENDPOINT_TEST_FAILED", "WebhookEndpoint", endpoint.id, req);
+        return json(res, result.ok ? 200 : 502, result);
+      } catch (error) {
+        const message = (error instanceof Error ? error.message : "Webhook test failed").slice(0, 500);
+        await audit(tenantId, context.auth!.userId, "WEBHOOK_ENDPOINT_TEST_FAILED", "WebhookEndpoint", endpoint.id, req);
+        return json(res, 502, { ok: false, httpStatus: null, error: message });
+      }
+    }
+
     const webhookPatchMatch = url.pathname.match(/^\/webhooks\/([^/]+)$/);
     if (webhookPatchMatch && req.method === "PATCH") {
       requireRole(context, "OWNER", "ADMIN");
@@ -200,6 +241,29 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       const updated = await prisma.webhookEndpoint.update({ where: { id: existing.id }, data });
       await audit(tenantId, context.auth!.userId, "WEBHOOK_ENDPOINT_UPDATED", "WebhookEndpoint", existing.id, req);
       return json(res, 200, { id: updated.id, name: updated.name, url: updated.url, events: updated.events, status: updated.status, createdAt: updated.createdAt, updatedAt: updated.updatedAt });
+    }
+
+    const replayDeliveryMatch = url.pathname.match(/^\/webhooks\/deliveries\/([^/]+)\/replay$/);
+    if (replayDeliveryMatch && req.method === "POST") {
+      requireRole(context, "OWNER", "ADMIN");
+      const delivery = await prisma.webhookDelivery.findFirst({
+        where: { id: replayDeliveryMatch[1], tenantId },
+        select: { id: true, tenantId: true, endpointId: true, eventId: true, eventType: true, payload: true, endpoint: { select: { status: true } } },
+      });
+      if (!delivery) return json(res, 404, { error: "webhook_delivery_not_found" });
+      if (delivery.endpoint.status !== "ACTIVE") return json(res, 409, { error: "webhook_endpoint_inactive" });
+      const replayed = await prisma.webhookDelivery.create({
+        data: {
+          tenantId: delivery.tenantId,
+          endpointId: delivery.endpointId,
+          eventId: `${delivery.eventId}:replay:${randomBytes(12).toString("hex")}`,
+          eventType: delivery.eventType,
+          payload: delivery.payload as Prisma.InputJsonValue,
+        },
+        select: { id: true, eventId: true, status: true },
+      });
+      await audit(tenantId, context.auth!.userId, "WEBHOOK_DELIVERY_REPLAYED", "WebhookDelivery", replayed.id, req);
+      return json(res, 201, { queued: true, id: replayed.id, eventId: replayed.eventId, status: replayed.status });
     }
 
     const retryDeliveryMatch = url.pathname.match(/^\/webhooks\/deliveries\/([^/]+)\/retry$/);
