@@ -32,7 +32,14 @@ const makeDelivery = (attempts = 1) => ({
 });
 
 const dependencies = (db: Record<string, unknown>, extras: Partial<WebhookWorkerDependencies> = {}): WebhookWorkerDependencies => ({
-  db: db as never,
+  db: {
+    ...db,
+    webhookDeliveryAttempt: (db as { webhookDeliveryAttempt?: unknown }).webhookDeliveryAttempt ?? {
+      create: async ({ data }: { data: Record<string, unknown> }) => ({ id: "attempt-1", ...data }),
+      update: async ({ data }: { data: Record<string, unknown> }) => data,
+      updateMany: async () => ({ count: 1 }),
+    },
+  } as never,
   validateTarget: async (url: string) => url,
   now: clock,
   ...extras,
