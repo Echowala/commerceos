@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { request as httpsRequest } from "node:https";
 import { prisma } from "@commerceos/database";
 
 export const MAX_ATTEMPTS = 5;
@@ -21,6 +22,8 @@ export type WebhookWorkerDependencies = {
   db?: typeof prisma;
   fetchImpl?: typeof fetch;
   validateTarget?: typeof validateWebhookTarget;
+  lookupImpl?: WebhookLookup;
+  requestPinnedImpl?: typeof requestWebhookPinned;
   now?: () => Date;
 };
 
@@ -60,10 +63,17 @@ type WebhookLookup = (
   options: { all: true; verbatim: true },
 ) => Promise<Array<{ address: string; family: number }>>;
 
-export const validateWebhookTarget = async (
+type ResolvedWebhookTarget = {
+  url: URL;
+  hostname: string;
+  address: string;
+  family: number;
+};
+
+const resolveWebhookTarget = async (
   rawUrl: string,
   lookupImpl: WebhookLookup = lookup as WebhookLookup,
-) => {
+): Promise<ResolvedWebhookTarget> => {
   let target: URL;
   try {
     target = new URL(rawUrl);
@@ -77,14 +87,60 @@ export const validateWebhookTarget = async (
   if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local")) {
     throw new Error("Webhook target host is not allowed");
   }
-  const addresses = isIP(hostname)
-    ? [{ address: hostname }]
+  const literalFamily = isIP(hostname);
+  const addresses = literalFamily
+    ? [{ address: hostname, family: literalFamily }]
     : await lookupImpl(hostname, { all: true, verbatim: true });
   if (!addresses.length || addresses.some(({ address }) => isPrivateAddress(address))) {
     throw new Error("Webhook target must resolve only to public IP addresses");
   }
-  return target.toString();
+  const selected = addresses[0]!;
+  return { url: target, hostname, address: selected.address, family: selected.family };
 };
+
+export const validateWebhookTarget = async (
+  rawUrl: string,
+  lookupImpl: WebhookLookup = lookup as WebhookLookup,
+) => (await resolveWebhookTarget(rawUrl, lookupImpl)).url.toString();
+
+type PinnedWebhookResponse = {
+  status: number;
+  ok: boolean;
+  body: { cancel: () => Promise<void> };
+};
+
+type PinnedWebhookRequestOptions = {
+  payload: string;
+  headers: Record<string, string>;
+  signal: AbortSignal;
+};
+
+// Connect to the validated IP while retaining the original hostname for TLS
+// certificate verification and the HTTP Host header, preventing a second DNS lookup.
+const requestWebhookPinned = (
+  target: ResolvedWebhookTarget,
+  options: PinnedWebhookRequestOptions,
+): Promise<PinnedWebhookResponse> => new Promise((resolve, reject) => {
+  const request = httpsRequest({
+    hostname: target.address,
+    port: target.url.port ? Number(target.url.port) : 443,
+    path: `${target.url.pathname}${target.url.search}`,
+    method: "POST",
+    servername: isIP(target.hostname) ? undefined : target.hostname,
+    headers: { ...options.headers, host: target.url.host },
+    signal: options.signal,
+    rejectUnauthorized: true,
+  }, response => {
+    const status = response.statusCode ?? 0;
+    resolve({
+      status,
+      ok: status >= 200 && status < 300,
+      body: { cancel: async () => { response.destroy(); } },
+    });
+  });
+  request.on("error", reject);
+  request.end(options.payload);
+});
 
 export const deliverWebhook = async (deliveryId: string, dependencies: WebhookWorkerDependencies = {}) => {
   const db = dependencies.db ?? prisma;
@@ -111,21 +167,34 @@ export const deliverWebhook = async (deliveryId: string, dependencies: WebhookWo
   });
   let httpStatus: number | null = null;
   try {
-    const target = await validateTarget(delivery.endpoint.url);
     const payload = JSON.stringify(delivery.payload);
-    // Do not follow redirects: they could redirect an approved URL to a private host.
-    const response = await fetchImpl(target, {
-      method: "POST",
-      redirect: "error",
-      headers: {
-        "content-type": "application/json",
-        "x-commerceos-event": delivery.eventType,
-        "x-commerceos-event-id": delivery.eventId,
-        "x-commerceos-signature": `sha256=${signPayload(delivery.endpoint.secret, payload)}`,
-      },
-      body: payload,
-      signal: AbortSignal.timeout(WEBHOOK_REQUEST_TIMEOUT_MS),
-    });
+    const headers = {
+      "content-type": "application/json",
+      "x-commerceos-event": delivery.eventType,
+      "x-commerceos-event-id": delivery.eventId,
+      "x-commerceos-signature": `sha256=${signPayload(delivery.endpoint.secret, payload)}`,
+    };
+    const signal = AbortSignal.timeout(WEBHOOK_REQUEST_TIMEOUT_MS);
+    let response: Response | PinnedWebhookResponse;
+    if (dependencies.fetchImpl || dependencies.validateTarget) {
+      // Preserve injectable fetch/validation for deterministic unit tests and custom adapters.
+      const target = await validateTarget(delivery.endpoint.url);
+      response = await fetchImpl(target, {
+        method: "POST",
+        redirect: "error",
+        headers,
+        body: payload,
+        signal,
+      });
+    } else {
+      // Production validates all DNS answers and connects to one of those exact IPs.
+      const target = await resolveWebhookTarget(delivery.endpoint.url, dependencies.lookupImpl);
+      response = await (dependencies.requestPinnedImpl ?? requestWebhookPinned)(target, {
+        payload,
+        headers,
+        signal,
+      });
+    }
 
     httpStatus = response.status;
     if (!response.ok) {

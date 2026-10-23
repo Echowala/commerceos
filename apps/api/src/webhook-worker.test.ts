@@ -96,6 +96,45 @@ describe("webhook worker", () => {
     );
   });
 
+  it("pins production delivery to a validated DNS answer while preserving the original host", async () => {
+    let lookupCalls = 0;
+    let requestTarget: { hostname: string; address: string; family: number; url: URL } | undefined;
+    let requestOptions: { headers: Record<string, string>; payload: string } | undefined;
+    const db = {
+      webhookDelivery: {
+        updateMany: async () => ({ count: 1 }),
+        findUnique: async () => makeDelivery(1),
+        update: async ({ data }: { data: Record<string, unknown> }) => data,
+      },
+    };
+    const deps = dependencies(db, {
+      fetchImpl: undefined,
+      validateTarget: undefined,
+      lookupImpl: async () => {
+        lookupCalls += 1;
+        return [
+          { address: "8.8.8.8", family: 4 },
+          { address: "2606:4700:4700::1111", family: 6 },
+        ];
+      },
+      requestPinnedImpl: async (target, options) => {
+        requestTarget = { hostname: target.hostname, address: target.address, family: target.family, url: target.url };
+        requestOptions = { headers: options.headers, payload: options.payload };
+        return { status: 204, ok: true, body: { cancel: async () => undefined } };
+      },
+    });
+
+    await deliverWebhook("delivery-1", deps);
+
+    assert.equal(lookupCalls, 1);
+    assert.equal(requestTarget?.hostname, "hooks.example.test");
+    assert.equal(requestTarget?.address, "8.8.8.8");
+    assert.equal(requestTarget?.family, 4);
+    assert.equal(requestTarget?.url.toString(), "https://hooks.example.test/receive");
+    assert.equal(requestOptions?.headers.host, undefined);
+    assert.equal(requestOptions?.headers["x-commerceos-event"], "ORDER_PLACED");
+  });
+
   it("rejects DNS names that resolve to no addresses", async () => {
     await assert.rejects(
       validateWebhookTarget("https://hooks.example.test/receive", async () => []),
