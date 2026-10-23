@@ -43,6 +43,13 @@ const isPrivateAddress = (address: string) => {
     // space. This also rejects multicast, unspecified, and other special-use ranges.
     return !/^[23]/.test(normalized) ||
       normalized.startsWith("2001:db8:") ||
+      // Reject additional special-purpose/documentation allocations that are
+      // syntactically inside 2000::/3 but are not globally routable targets.
+      normalized.startsWith("2001:2:") ||
+      normalized.startsWith("2001:10:") ||
+      normalized.startsWith("2001:20:") ||
+      normalized.startsWith("2002:") ||
+      normalized.startsWith("3fff:") ||
       normalized.startsWith("::ffff:");
   }
   return true;
