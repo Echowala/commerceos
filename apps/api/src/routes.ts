@@ -9,6 +9,7 @@ import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
 import { triggerInventoryLowAutomation, triggerOrderPlacedAutomation } from "./automation-hooks.js";
 import { audit } from "./audit.js";
 import { validateWebhookTarget, WEBHOOK_REQUEST_TIMEOUT_MS } from "./webhook-worker.js";
+import { isWebhookReplayRateLimited } from "./webhook-replay.js";
 
 const json = (res: ServerResponse, status: number, body: unknown) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.end(JSON.stringify(body)); };
 const body = async (req: IncomingMessage) => { let raw = ""; for await (const chunk of req) raw += chunk; if (raw.length > 1_000_000) throw new Error("PAYLOAD_TOO_LARGE"); return raw ? JSON.parse(raw) : {}; };
@@ -252,16 +253,14 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       });
       if (!delivery) return json(res, 404, { error: "webhook_delivery_not_found" });
       if (delivery.endpoint.status !== "ACTIVE") return json(res, 409, { error: "webhook_endpoint_inactive" });
-      const replayWindowStart = new Date(Date.now() - 10 * 60 * 1000);
-      const recentReplays = await prisma.webhookDelivery.count({
-        where: {
-          tenantId,
-          endpointId: delivery.endpointId,
-          eventId: { startsWith: `${delivery.eventId}:replay:` },
-          createdAt: { gte: replayWindowStart },
-        },
+      const rateLimited = await isWebhookReplayRateLimited({
+        db: prisma,
+        tenantId,
+        endpointId: delivery.endpointId,
+        originalEventId: delivery.eventId,
+        now: new Date(),
       });
-      if (recentReplays >= 5) {
+      if (rateLimited) {
         return json(res, 429, { error: "webhook_replay_rate_limited", retryAfterSeconds: 600 });
       }
       const replayed = await prisma.webhookDelivery.create({
