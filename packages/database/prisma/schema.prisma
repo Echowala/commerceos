@@ -404,6 +404,7 @@ model WebhookDelivery {
   updatedAt DateTime @updatedAt
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  attemptHistory WebhookDeliveryAttempt[]
   @@unique([endpointId, eventId])
   @@index([tenantId, status, availableAt])
   @@index([endpointId, createdAt])
