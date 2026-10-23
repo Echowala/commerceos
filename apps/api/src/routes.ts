@@ -10,6 +10,7 @@ import { triggerInventoryLowAutomation, triggerOrderPlacedAutomation } from "./a
 import { audit } from "./audit.js";
 import { validateWebhookTarget, WEBHOOK_REQUEST_TIMEOUT_MS } from "./webhook-worker.js";
 import { isWebhookReplayRateLimited } from "./webhook-replay.js";
+import { webhookTenantScope } from "./webhook-tenant-scope.js";
 
 const json = (res: ServerResponse, status: number, body: unknown) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.end(JSON.stringify(body)); };
 const body = async (req: IncomingMessage) => { let raw = ""; for await (const chunk of req) raw += chunk; if (raw.length > 1_000_000) throw new Error("PAYLOAD_TOO_LARGE"); return raw ? JSON.parse(raw) : {}; };
@@ -167,7 +168,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (webhookTestMatch && req.method === "POST") {
       requireRole(context, "OWNER", "ADMIN");
       const endpoint = await prisma.webhookEndpoint.findFirst({
-        where: { id: webhookTestMatch[1], tenantId },
+        where: webhookTenantScope(webhookTestMatch[1], tenantId),
         select: { id: true, name: true, url: true, secret: true },
       });
       if (!endpoint) return json(res, 404, { error: "webhook_not_found" });
@@ -206,7 +207,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     const webhookPatchMatch = url.pathname.match(/^\/webhooks\/([^/]+)$/);
     if (webhookPatchMatch && req.method === "PATCH") {
       requireRole(context, "OWNER", "ADMIN");
-      const existing = await prisma.webhookEndpoint.findFirst({ where: { id: webhookPatchMatch[1], tenantId } });
+      const existing = await prisma.webhookEndpoint.findFirst({ where: webhookTenantScope(webhookPatchMatch[1], tenantId) });
       if (!existing) return json(res, 404, { error: "webhook_not_found" });
       const input = await body(req);
       const data: { name?: string; url?: string; events?: string[]; status?: string; secret?: string } = {};
@@ -248,7 +249,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (replayDeliveryMatch && req.method === "POST") {
       requireRole(context, "OWNER", "ADMIN");
       const delivery = await prisma.webhookDelivery.findFirst({
-        where: { id: replayDeliveryMatch[1], tenantId },
+        where: webhookTenantScope(replayDeliveryMatch[1], tenantId),
         select: { id: true, tenantId: true, endpointId: true, eventId: true, eventType: true, payload: true, endpoint: { select: { status: true } } },
       });
       if (!delivery) return json(res, 404, { error: "webhook_delivery_not_found" });
@@ -281,7 +282,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (retryDeliveryMatch && req.method === "POST") {
       requireRole(context, "OWNER", "ADMIN");
       const delivery = await prisma.webhookDelivery.findFirst({
-        where: { id: retryDeliveryMatch[1], tenantId },
+        where: webhookTenantScope(retryDeliveryMatch[1], tenantId),
         select: { id: true, status: true, endpoint: { select: { status: true } } },
       });
       if (!delivery) return json(res, 404, { error: "webhook_delivery_not_found" });
@@ -299,7 +300,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     const webhookMatch = url.pathname.match(/^\/webhooks\/([^/]+)$/);
     if (webhookMatch && req.method === "DELETE") {
       requireRole(context, "OWNER", "ADMIN");
-      const existing = await prisma.webhookEndpoint.findFirst({ where: { id: webhookMatch[1], tenantId } });
+      const existing = await prisma.webhookEndpoint.findFirst({ where: webhookTenantScope(webhookMatch[1], tenantId) });
       if (!existing) return json(res, 404, { error: "webhook_not_found" });
       await prisma.webhookEndpoint.delete({ where: { id: existing.id } });
       return json(res, 200, { deleted: true });
