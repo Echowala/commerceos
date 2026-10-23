@@ -252,6 +252,18 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       });
       if (!delivery) return json(res, 404, { error: "webhook_delivery_not_found" });
       if (delivery.endpoint.status !== "ACTIVE") return json(res, 409, { error: "webhook_endpoint_inactive" });
+      const replayWindowStart = new Date(Date.now() - 10 * 60 * 1000);
+      const recentReplays = await prisma.webhookDelivery.count({
+        where: {
+          tenantId,
+          endpointId: delivery.endpointId,
+          eventId: { startsWith: `${delivery.eventId}:replay:` },
+          createdAt: { gte: replayWindowStart },
+        },
+      });
+      if (recentReplays >= 5) {
+        return json(res, 429, { error: "webhook_replay_rate_limited", retryAfterSeconds: 600 });
+      }
       const replayed = await prisma.webhookDelivery.create({
         data: {
           tenantId: delivery.tenantId,
