@@ -37,9 +37,11 @@ const isPrivateAddress = (address: string) => {
   }
   if (isIP(address) === 6) {
     const normalized = address.toLowerCase();
-    return normalized === "::" || normalized === "::1" ||
-      normalized.startsWith("fc") || normalized.startsWith("fd") ||
-      /^fe[89ab]/.test(normalized) || normalized.startsWith("::ffff:");
+    // Only accept IPv6 global-unicast space (2000::/3), excluding documentation
+    // space. This also rejects multicast, unspecified, and other special-use ranges.
+    return !/^[23]/.test(normalized) ||
+      normalized.startsWith("2001:db8:") ||
+      normalized.startsWith("::ffff:");
   }
   return true;
 };
