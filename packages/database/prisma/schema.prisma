@@ -408,3 +408,20 @@ model WebhookDelivery {
   @@index([tenantId, status, availableAt])
   @@index([endpointId, createdAt])
 }
+
+model WebhookDeliveryAttempt {
+  id String @id @default(cuid())
+  deliveryId String
+  attemptNumber Int
+  status String @default("IN_PROGRESS")
+  httpStatus Int?
+  error String?
+  startedAt DateTime @default(now())
+  finishedAt DateTime?
+  durationMs Int?
+  createdAt DateTime @default(now())
+  delivery WebhookDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  @@unique([deliveryId, attemptNumber])
+  @@index([deliveryId, startedAt])
+  @@index([status, startedAt])
+}
