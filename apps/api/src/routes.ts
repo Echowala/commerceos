@@ -96,12 +96,35 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (url.pathname === "/dashboard" && req.method === "GET") { const [stores, products, orders, customers, revenue] = await Promise.all([prisma.store.count({ where: { tenantId } }), prisma.product.count({ where: { store: { tenantId }, status: "ACTIVE" } }), prisma.order.count({ where: { tenantId } }), prisma.customer.count({ where: { tenantId } }), prisma.order.aggregate({ where: { tenantId, paymentStatus: "PAID" }, _sum: { total: true } })]); return json(res, 200, { stores, products, orders, customers, revenue: revenue._sum.total?.toString() ?? "0" }); }
     if (url.pathname === "/webhooks" && req.method === "GET") {
       requireRole(context, "OWNER", "ADMIN");
-      const endpoints = await prisma.webhookEndpoint.findMany({
-        where: { tenantId },
-        orderBy: { createdAt: "desc" },
-        select: { id: true, name: true, url: true, events: true, status: true, createdAt: true, updatedAt: true },
-      });
-      return json(res, 200, endpoints);
+      const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const [endpoints, lifetimeGroups, recentGroups] = await Promise.all([
+        prisma.webhookEndpoint.findMany({
+          where: { tenantId },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, name: true, url: true, events: true, status: true, createdAt: true, updatedAt: true },
+        }),
+        prisma.webhookDelivery.groupBy({
+          by: ["endpointId", "status"],
+          where: { tenantId },
+          _count: { _all: true },
+        }),
+        prisma.webhookDelivery.groupBy({
+          by: ["endpointId", "status"],
+          where: { tenantId, createdAt: { gte: since } },
+          _count: { _all: true },
+        }),
+      ]);
+      const summarize = (groups: typeof lifetimeGroups, endpointId: string) => {
+        const count = (status: string) => groups.find(item => item.endpointId === endpointId && item.status === status)?._count._all ?? 0;
+        return { delivered: count("DELIVERED"), failed: count("FAILED"), queued: count("QUEUED"), delivering: count("DELIVERING") };
+      };
+      return json(res, 200, endpoints.map(endpoint => ({
+        ...endpoint,
+        health: {
+          lifetime: summarize(lifetimeGroups, endpoint.id),
+          last7Days: summarize(recentGroups, endpoint.id),
+        },
+      })));
     }
 
     if (url.pathname === "/webhooks/deliveries" && req.method === "GET") {
