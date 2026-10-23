@@ -86,6 +86,9 @@ describe("webhook worker", () => {
       "https://100.64.0.1/hook",
       "https://224.0.0.1/hook",
       "https://0.0.0.0/hook",
+      "https://198.51.100.1/hook",
+      "https://203.0.113.1/hook",
+      "https://192.88.99.1/hook",
     ];
     for (const target of blocked) {
       await assert.rejects(validateWebhookTarget(target), /public IP addresses/);
