@@ -117,7 +117,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       const [items, total] = await Promise.all([
         prisma.webhookDelivery.findMany({
           where, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit,
-          select: { id: true, endpointId: true, eventId: true, eventType: true, status: true, attempts: true, availableAt: true, deliveredAt: true, lastError: true, createdAt: true, updatedAt: true, endpoint: { select: { name: true, status: true } }, attemptsHistory: { select: { id: true, attemptNumber: true, status: true, httpStatus: true, error: true, startedAt: true, finishedAt: true, durationMs: true }, orderBy: { attemptNumber: "desc" }, take: 10 } },
+          select: { id: true, endpointId: true, eventId: true, eventType: true, status: true, attempts: true, availableAt: true, deliveredAt: true, lastError: true, createdAt: true, updatedAt: true, endpoint: { select: { name: true, status: true } }, attemptHistory: { select: { id: true, attemptNumber: true, status: true, httpStatus: true, error: true, startedAt: true, finishedAt: true, durationMs: true }, orderBy: { attemptNumber: "desc" }, take: 10 } },
         }),
         prisma.webhookDelivery.count({ where }),
       ]);
