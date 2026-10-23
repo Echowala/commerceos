@@ -48,7 +48,15 @@ const isPrivateAddress = (address: string) => {
   return true;
 };
 
-export const validateWebhookTarget = async (rawUrl: string) => {
+type WebhookLookup = (
+  hostname: string,
+  options: { all: true; verbatim: true },
+) => Promise<Array<{ address: string; family: number }>>;
+
+export const validateWebhookTarget = async (
+  rawUrl: string,
+  lookupImpl: WebhookLookup = lookup as WebhookLookup,
+) => {
   let target: URL;
   try {
     target = new URL(rawUrl);
@@ -64,7 +72,7 @@ export const validateWebhookTarget = async (rawUrl: string) => {
   }
   const addresses = isIP(hostname)
     ? [{ address: hostname }]
-    : await lookup(hostname, { all: true, verbatim: true });
+    : await lookupImpl(hostname, { all: true, verbatim: true });
   if (!addresses.length || addresses.some(({ address }) => isPrivateAddress(address))) {
     throw new Error("Webhook target must resolve only to public IP addresses");
   }

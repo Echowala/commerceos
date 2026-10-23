@@ -76,6 +76,33 @@ describe("webhook worker", () => {
     await assert.rejects(validateWebhookTarget("https://user:pass@example.com/hook"), /embedded credentials/);
   });
 
+  it("accepts DNS names only when every resolved address is public", async () => {
+    const lookupPublic = async () => [
+      { address: "8.8.8.8", family: 4 },
+      { address: "2606:4700:4700::1111", family: 6 },
+    ];
+    assert.equal(
+      await validateWebhookTarget("https://hooks.example.test/receive", lookupPublic),
+      "https://hooks.example.test/receive",
+    );
+
+    const lookupMixed = async () => [
+      { address: "8.8.8.8", family: 4 },
+      { address: "127.0.0.1", family: 4 },
+    ];
+    await assert.rejects(
+      validateWebhookTarget("https://hooks.example.test/receive", lookupMixed),
+      /public IP addresses/,
+    );
+  });
+
+  it("rejects DNS names that resolve to no addresses", async () => {
+    await assert.rejects(
+      validateWebhookTarget("https://hooks.example.test/receive", async () => []),
+      /public IP addresses/,
+    );
+  });
+
   it("rejects private, loopback, link-local, and reserved IPv4 webhook targets", async () => {
     const blocked = [
       "https://127.0.0.1/hook",
