@@ -76,6 +76,34 @@ describe("webhook worker", () => {
     await assert.rejects(validateWebhookTarget("https://user:pass@example.com/hook"), /embedded credentials/);
   });
 
+  it("rejects private, loopback, link-local, and reserved IPv4 webhook targets", async () => {
+    const blocked = [
+      "https://127.0.0.1/hook",
+      "https://10.0.0.1/hook",
+      "https://172.16.0.1/hook",
+      "https://192.168.1.1/hook",
+      "https://169.254.169.254/hook",
+      "https://100.64.0.1/hook",
+      "https://224.0.0.1/hook",
+      "https://0.0.0.0/hook",
+    ];
+    for (const target of blocked) {
+      await assert.rejects(validateWebhookTarget(target), /public IP addresses/);
+    }
+  });
+
+  it("rejects loopback, unique-local, and link-local IPv6 webhook targets", async () => {
+    const blocked = [
+      "https://[::1]/hook",
+      "https://[fc00::1]/hook",
+      "https://[fd12::1]/hook",
+      "https://[fe80::1]/hook",
+    ];
+    for (const target of blocked) {
+      await assert.rejects(validateWebhookTarget(target), /public IP addresses/);
+    }
+  });
+
   it("atomically claims a delivery so concurrent workers only send once", async () => {
     let claimed = false;
     let fetchCalls = 0;
