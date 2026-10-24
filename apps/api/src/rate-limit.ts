@@ -4,6 +4,7 @@ import { createClient, type RedisClientType } from "redis";
 const WINDOW_MS = 60_000;
 const MAX_REQUESTS = 120;
 const PUBLIC_CHECKOUT_MAX = 20;
+const AUTH_ENDPOINT_MAX = 10;
 const MAX_MEMORY_BUCKETS = 50_000;
 const MAX_CLIENT_KEY_LENGTH = 128;
 
@@ -58,8 +59,8 @@ const consumeMemory = (key: string, limit: number, now = Date.now()) => {
   return { allowed: existing.count <= limit, remaining: Math.max(0, limit - existing.count), resetAt: existing.resetAt };
 };
 
-export const rateLimit = async (req: IncomingMessage, res: ServerResponse, scope: "api" | "public-checkout") => {
-  const limit = scope === "public-checkout" ? PUBLIC_CHECKOUT_MAX : MAX_REQUESTS;
+export const rateLimit = async (req: IncomingMessage, res: ServerResponse, scope: "api" | "public-checkout" | "auth") => {
+  const limit = scope === "public-checkout" ? PUBLIC_CHECKOUT_MAX : scope === "auth" ? AUTH_ENDPOINT_MAX : MAX_REQUESTS;
   const key = `${scope}:${getClientKey(req)}`;
   let result;
   try {
