@@ -19,13 +19,24 @@ export const createToken = (claims: Omit<AuthClaims, "exp">, ttlSeconds = 60 * 6
 };
 
 export const verifyToken = (token: string): AuthClaims | null => {
-  const [payload, signature] = token.split(".");
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const [payload, signature] = parts;
   if (!payload || !signature) return null;
   const expected = sign(payload);
   if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
   try {
-    const claims = JSON.parse(Buffer.from(payload, "base64url").toString()) as AuthClaims;
-    return claims.exp > Math.floor(Date.now() / 1000) ? claims : null;
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString()) as Partial<AuthClaims>;
+    const validRole = claims.role === "OWNER" || claims.role === "ADMIN" || claims.role === "STAFF";
+    if (
+      typeof claims.userId !== "string" || !claims.userId.trim() ||
+      typeof claims.tenantId !== "string" || !claims.tenantId.trim() ||
+      !validRole ||
+      !Number.isSafeInteger(claims.sessionVersion) || claims.sessionVersion! < 0 ||
+      typeof claims.exp !== "number" || !Number.isFinite(claims.exp) ||
+      claims.exp <= Math.floor(Date.now() / 1000)
+    ) return null;
+    return claims as AuthClaims;
   } catch {
     return null;
   }
