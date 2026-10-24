@@ -36,8 +36,8 @@ const server = createServer(async (req, res) => {
   try {
     if (rejectInvalidRequest(req, res)) return;
     const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
-    const isPublicCheckout = /^\\/public\\/stores\\/[^/]+\\/[^/]+\\/orders$/.test(requestPath) && req.method === "POST";
-    const isAuthSensitive = /^\\/auth\\/(signup|dev-login)$/.test(requestPath) && req.method === "POST";
+    const isPublicCheckout = /^\/public\/stores\/[^/]+\/[^/]+\/orders$/.test(requestPath) && req.method === "POST";
+    const isAuthSensitive = /^\/auth\/(signup|dev-login)$/.test(requestPath) && req.method === "POST";
     const rateLimitScope = isAuthSensitive ? "auth" : isPublicCheckout ? "public-checkout" : "api";
     if (!(await rateLimit(req, res, rateLimitScope))) return;
 
