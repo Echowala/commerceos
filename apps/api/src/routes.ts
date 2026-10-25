@@ -8,7 +8,7 @@ import { recordInventoryMovement } from "./inventory.js";
 import { getRequestContext, requireRole, requireTenant } from "./tenant.js";
 import { triggerInventoryLowAutomation, triggerOrderPlacedAutomation } from "./automation-hooks.js";
 import { audit } from "./audit.js";
-import { validateWebhookTarget, WEBHOOK_REQUEST_TIMEOUT_MS } from "./webhook-worker.js";
+import { sendWebhookTestRequest } from "./webhook-worker.js";
 import { isWebhookReplayRateLimited } from "./webhook-replay.js";
 import { webhookTenantScope } from "./webhook-tenant-scope.js";
 
@@ -180,18 +180,11 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
         data: { endpointId: endpoint.id, endpointName: endpoint.name, test: true },
       });
       try {
-        const target = await validateWebhookTarget(endpoint.url);
-        const response = await fetch(target, {
-          method: "POST",
-          redirect: "error",
-          headers: {
-            "content-type": "application/json",
-            "x-commerceos-event": "WEBHOOK_TEST",
-            "x-commerceos-event-id": eventId,
-            "x-commerceos-signature": `sha256=${createHmac("sha256", endpoint.secret).update(payload).digest("hex")}`,
-          },
-          body: payload,
-          signal: AbortSignal.timeout(WEBHOOK_REQUEST_TIMEOUT_MS),
+        const response = await sendWebhookTestRequest(endpoint.url, payload, {
+          "content-type": "application/json",
+          "x-commerceos-event": "WEBHOOK_TEST",
+          "x-commerceos-event-id": eventId,
+          "x-commerceos-signature": `sha256=${createHmac("sha256", endpoint.secret).update(payload).digest("hex")}`,
         });
         await response.body?.cancel().catch(() => undefined);
         const result = { ok: response.ok, httpStatus: response.status, error: response.ok ? null : `Webhook responded with HTTP ${response.status}` };

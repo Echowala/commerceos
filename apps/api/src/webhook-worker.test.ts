@@ -6,6 +6,7 @@ import {
   getWebhookRetryDelay,
   MAX_ATTEMPTS,
   recoverStuckWebhookDeliveries,
+  sendWebhookTestRequest,
   WEBHOOK_REQUEST_TIMEOUT_MS,
   validateWebhookTarget,
 } from "./webhook-worker.js";
@@ -46,6 +47,56 @@ const dependencies = (db: Record<string, unknown>, extras: Partial<WebhookWorker
 });
 
 describe("webhook worker", () => {
+  it("pins webhook test requests to a validated DNS answer", async () => {
+    let lookupCalls = 0;
+    let requestTarget: { hostname: string; address: string; family: number; url: URL } | undefined;
+    let requestOptions: { headers: Record<string, string>; payload: string } | undefined;
+    const response = await sendWebhookTestRequest(
+      "https://hooks.example.test/test?source=admin",
+      '{"test":true}',
+      { "x-commerceos-event": "WEBHOOK_TEST" },
+      {
+        lookupImpl: async () => {
+          lookupCalls += 1;
+          return [{ address: "8.8.4.4", family: 4 }];
+        },
+        requestPinnedImpl: async (target, options) => {
+          requestTarget = { hostname: target.hostname, address: target.address, family: target.family, url: target.url };
+          requestOptions = { headers: options.headers, payload: options.payload };
+          return { status: 204, ok: true, body: { cancel: async () => undefined } };
+        },
+      },
+    );
+    assert.equal(lookupCalls, 1);
+    assert.equal(requestTarget?.hostname, "hooks.example.test");
+    assert.equal(requestTarget?.address, "8.8.4.4");
+    assert.equal(requestTarget?.url.toString(), "https://hooks.example.test/test?source=admin");
+    assert.equal(requestOptions?.headers.host, undefined);
+    assert.equal(requestOptions?.payload, '{"test":true}');
+    assert.equal(response.status, 204);
+  });
+
+  it("rejects webhook test requests when DNS includes a private address", async () => {
+    let requestCalls = 0;
+    await assert.rejects(sendWebhookTestRequest(
+      "https://hooks.example.test/test",
+      "{}",
+      {},
+      {
+        lookupImpl: async () => [
+          { address: "8.8.4.4", family: 4 },
+          { address: "10.0.0.8", family: 4 },
+        ],
+        requestPinnedImpl: async () => {
+          requestCalls += 1;
+          return { status: 204, ok: true, body: { cancel: async () => undefined } };
+        },
+      },
+    ), /public IP addresses/);
+    assert.equal(requestCalls, 0);
+  });
+
+
   it("signs webhook payloads with HMAC SHA-256", () => {
     const signature = crypto.createHmac("sha256", "secret").update('{"ok":true}').digest("hex");
     assert.equal(signature.length, 64);

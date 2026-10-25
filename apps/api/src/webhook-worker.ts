@@ -103,6 +103,20 @@ export const validateWebhookTarget = async (
   lookupImpl: WebhookLookup = lookup as WebhookLookup,
 ) => (await resolveWebhookTarget(rawUrl, lookupImpl)).url.toString();
 
+export const sendWebhookTestRequest = async (
+  rawUrl: string,
+  payload: string,
+  headers: Record<string, string>,
+  dependencies: Pick<WebhookWorkerDependencies, "lookupImpl" | "requestPinnedImpl"> = {},
+) => {
+  const target = await resolveWebhookTarget(rawUrl, dependencies.lookupImpl);
+  return (dependencies.requestPinnedImpl ?? requestWebhookPinned)(target, {
+    payload,
+    headers,
+    signal: AbortSignal.timeout(WEBHOOK_REQUEST_TIMEOUT_MS),
+  });
+};
+
 type PinnedWebhookResponse = {
   status: number;
   ok: boolean;
