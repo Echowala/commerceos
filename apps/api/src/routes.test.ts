@@ -1,4 +1,5 @@
-import { createServer, type AddressInfo } from "node:http";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { handleRequest } from "./routes.js";
