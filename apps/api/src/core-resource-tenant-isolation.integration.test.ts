@@ -133,8 +133,8 @@ describe("database-backed core resource tenant isolation", { skip: !databaseConf
 
       const analyticsResponse = await fetch(`${baseUrl}/analytics`, { headers: authHeaders });
       assert.equal(analyticsResponse.status, 200);
-      const analytics = await analyticsResponse.json() as { summary: { orders: number; customers: number; revenue: string }; topProducts: unknown[] };
-      assert.deepEqual(analytics.summary, { orders: 1, customers: 1, revenue: "12.50" });
+      const analytics = await analyticsResponse.json() as { summary: { orders: number; customers: number; revenue: string; averageOrderValue: string }; topProducts: unknown[] };
+      assert.deepEqual(analytics.summary, { orders: 1, customers: 1, revenue: "12.50", averageOrderValue: "12.50" });
       assert.deepEqual(analytics.topProducts, []);
 
       for (const [path, error] of [
