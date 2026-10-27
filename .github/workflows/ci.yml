@@ -12,6 +12,22 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://commerceos:commerceos@localhost:5432/commerceos_test?schema=public
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: commerceos
+          POSTGRES_PASSWORD: commerceos
+          POSTGRES_DB: commerceos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U commerceos -d commerceos_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,6 +67,9 @@ jobs:
 
       - name: Typecheck
         run: pnpm typecheck
+
+      - name: Prepare test database
+        run: pnpm --filter @commerceos/database exec prisma db push --schema prisma/schema.prisma
 
       - name: API tests
         run: pnpm --filter @commerceos/api test
