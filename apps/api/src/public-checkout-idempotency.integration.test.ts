@@ -8,6 +8,8 @@ import { handleRequest } from "./routes.js";
 const databaseConfigured = Boolean(process.env.DATABASE_URL);
 const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const tenantId = `public-checkout-idem-${suffix}`;
+const invalidTenantId = `public-checkout-invalid-${suffix}`;
+const invalidTenantSlug = `public-checkout-invalid-${suffix}`;
 const tenantSlug = `public-checkout-idem-${suffix}`;
 const storeSlug = `public-checkout-store-${suffix}`;
 
@@ -29,7 +31,7 @@ const withServer = async (run: (baseUrl: string) => Promise<void>) => {
 
 describe("database-backed public checkout idempotency", { skip: !databaseConfigured }, () => {
   after(async () => {
-    await prisma.tenant.deleteMany({ where: { id: tenantId } });
+    await prisma.tenant.deleteMany({ where: { id: { in: [tenantId, invalidTenantId] } } });
   });
 
   it("replays the original order and rejects reuse of a key for a different checkout", async () => {
@@ -103,11 +105,11 @@ describe("database-backed public checkout idempotency", { skip: !databaseConfigu
 
   it("rejects malformed idempotency keys before creating an order", async () => {
     await prisma.tenant.create({
-      data: { id: tenantId, name: "Public Checkout Idempotency", slug: tenantSlug },
-    }).catch(error => {
-      if (!(error instanceof Error) || !error.message.includes("Unique constraint")) throw error;
+      data: { id: invalidTenantId, name: "Public Checkout Invalid Key", slug: invalidTenantSlug },
     });
-    const store = await prisma.store.findFirstOrThrow({ where: { tenantId } });
+    const store = await prisma.store.create({
+      data: { tenantId: invalidTenantId, name: "Invalid Key Store", slug: `invalid-key-store-${suffix}` },
+    });
     const product = await prisma.product.create({
       data: {
         storeId: store.id,
@@ -122,7 +124,7 @@ describe("database-backed public checkout idempotency", { skip: !databaseConfigu
     assert.ok(variant);
 
     await withServer(async baseUrl => {
-      const response = await fetch(`${baseUrl}/public/stores/${tenantSlug}/${storeSlug}/orders`, {
+      const response = await fetch(`${baseUrl}/public/stores/${invalidTenantSlug}/${store.slug}/orders`, {
         method: "POST",
         headers: { "content-type": "application/json", "idempotency-key": "short" },
         body: JSON.stringify({
