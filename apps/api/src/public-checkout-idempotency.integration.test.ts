@@ -151,6 +151,8 @@ describe("database-backed public checkout idempotency", { skip: !databaseConfigu
       const createdResult = conflictRaceBodies[conflictRaceResponses.findIndex(response => response.status === 201)];
       const rejectedResult = conflictRaceBodies[conflictRaceResponses.findIndex(response => response.status === 409)];
       assert.ok(createdResult?.orderNumber, "the winning request should receive the created order");
+      const winningTotal = Number(createdResult.total);
+      assert.ok(Number.isFinite(winningTotal), "the winning request should return its order total");
       assert.deepEqual(rejectedResult, {
         error: "idempotency_key_reused",
         message: "This idempotency key was already used for a different checkout.",
@@ -163,7 +165,7 @@ describe("database-backed public checkout idempotency", { skip: !databaseConfigu
       assert.equal(movementsAfterConflictRace.length, 3, "conflicting concurrent retry must create only one SALE movement");
       assert.equal(
         movementsAfterConflictRace.reduce((total, movement) => total + movement.quantity, 0),
-        -3 - Number((createdResult as { total?: string }).total === "30.00" ? 2 : 1),
+        -3 - winningTotal / 15,
         "only the winning checkout may consume stock",
       );
     });
