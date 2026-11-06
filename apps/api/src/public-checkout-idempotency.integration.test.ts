@@ -127,6 +127,45 @@ describe("database-backed public checkout idempotency", { skip: !databaseConfigu
       assert.equal(ordersAfterConcurrent.length, 2, "concurrent replay must create only one additional order");
       assert.equal(movementsAfterConcurrent.length, 2, "concurrent replay must create only one additional SALE movement");
       assert.equal(movementsAfterConcurrent.reduce((total, movement) => total + movement.quantity, 0), -3);
+
+      const conflictingConcurrentKey = `checkout-race-conflict-${suffix}`.padEnd(32, "x");
+      const conflictingPayload = {
+        ...payload,
+        items: [{ variantId: variant.id, quantity: 2 }],
+      };
+      const matchingPayload = {
+        ...payload,
+        items: [{ variantId: variant.id, quantity: 1 }],
+      };
+      const beforeConflictRace = await prisma.order.count({ where: { storeId: store.id } });
+      const conflictRaceResponses = await Promise.all([
+        submit(matchingPayload, conflictingConcurrentKey),
+        submit(conflictingPayload, conflictingConcurrentKey),
+      ]);
+      assert.deepEqual(
+        conflictRaceResponses.map(response => response.status).sort((a, b) => a - b),
+        [201, 409],
+        "simultaneous requests reusing a key for different carts must create once and reject once",
+      );
+      const conflictRaceBodies = await Promise.all(conflictRaceResponses.map(response => response.json())) as Array<Record<string, unknown>>;
+      const createdResult = conflictRaceBodies[conflictRaceResponses.findIndex(response => response.status === 201)];
+      const rejectedResult = conflictRaceBodies[conflictRaceResponses.findIndex(response => response.status === 409)];
+      assert.ok(createdResult?.orderNumber, "the winning request should receive the created order");
+      assert.deepEqual(rejectedResult, {
+        error: "idempotency_key_reused",
+        message: "This idempotency key was already used for a different checkout.",
+      });
+      const [ordersAfterConflictRace, movementsAfterConflictRace] = await Promise.all([
+        prisma.order.findMany({ where: { storeId: store.id } }),
+        prisma.inventoryMovement.findMany({ where: { tenantId, type: "SALE" } }),
+      ]);
+      assert.equal(ordersAfterConflictRace.length, beforeConflictRace + 1, "conflicting concurrent retry must create only one order");
+      assert.equal(movementsAfterConflictRace.length, 3, "conflicting concurrent retry must create only one SALE movement");
+      assert.equal(
+        movementsAfterConflictRace.reduce((total, movement) => total + movement.quantity, 0),
+        -3 - Number((createdResult as { total?: string }).total === "30.00" ? 2 : 1),
+        "only the winning checkout may consume stock",
+      );
     });
   });
 
