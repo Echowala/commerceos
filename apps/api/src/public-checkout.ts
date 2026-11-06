@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { prisma } from "@commerceos/database";
+import { Prisma, prisma } from "@commerceos/database";
 import { triggerCustomerCreatedAutomation, triggerInventoryLowAutomation, triggerOrderPlacedAutomation } from "./automation-hooks.js";
 
 const orderNumber = () => `CO-${Date.now().toString(36).toUpperCase()}-${randomBytes(3).toString("hex").toUpperCase()}`;
@@ -114,7 +114,9 @@ export async function createPublicOrder(input: CheckoutInput, tenantSlug: string
   } catch (error) {
     if (error instanceof Error && error.message === "INVALID_PAYMENT_METHOD") throw error;
     if (error instanceof Error && error.message === "PAYMENT_REFERENCE_REQUIRED") throw error;
-    if (idempotencyKey && error instanceof Error && error.message.includes("Order_storeId_idempotencyKey_key")) {
+    if (idempotencyKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      // A concurrent request may win the unique (storeId, idempotencyKey) insert.
+      // The losing transaction is rolled back; read the winner outside that transaction.
       const existing = await prisma.order.findFirst({ where: { storeId: store.id, idempotencyKey } });
       if (existing) {
         if (existing.idempotencyFingerprint !== fingerprint) throw new Error("IDEMPOTENCY_KEY_REUSED");

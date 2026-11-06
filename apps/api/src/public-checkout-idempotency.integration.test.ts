@@ -100,6 +100,33 @@ describe("database-backed public checkout idempotency", { skip: !databaseConfigu
       assert.equal(orders.length, 1);
       assert.equal(movements.length, 1);
       assert.equal(movements[0]?.quantity, -2);
+
+      const concurrentKey = `checkout-concurrent-${suffix}`.padEnd(24, "x");
+      const concurrentPayload = {
+        ...payload,
+        items: [{ variantId: variant.id, quantity: 1 }],
+      };
+      const concurrentResponses = await Promise.all([
+        submit(concurrentPayload, concurrentKey),
+        submit(concurrentPayload, concurrentKey),
+      ]);
+      assert.deepEqual(
+        concurrentResponses.map(response => response.status).sort((a, b) => a - b),
+        [200, 201],
+        "simultaneous requests with the same key should create once and replay once",
+      );
+      const concurrentOrders = await Promise.all(concurrentResponses.map(response => response.json())) as typeof firstOrder[];
+      assert.deepEqual(concurrentOrders[0], concurrentOrders[1], "both concurrent callers must receive the same order");
+
+      const [stockAfterConcurrent, ordersAfterConcurrent, movementsAfterConcurrent] = await Promise.all([
+        prisma.productVariant.findUniqueOrThrow({ where: { id: variant.id } }),
+        prisma.order.findMany({ where: { storeId: store.id } }),
+        prisma.inventoryMovement.findMany({ where: { tenantId, type: "SALE" } }),
+      ]);
+      assert.equal(stockAfterConcurrent.stock, 7, "concurrent replay must decrement stock only once");
+      assert.equal(ordersAfterConcurrent.length, 2, "concurrent replay must create only one additional order");
+      assert.equal(movementsAfterConcurrent.length, 2, "concurrent replay must create only one additional SALE movement");
+      assert.equal(movementsAfterConcurrent.reduce((total, movement) => total + movement.quantity, 0), -3);
     });
   });
 
